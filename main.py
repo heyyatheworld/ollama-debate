@@ -1,3 +1,4 @@
+import argparse
 import ollama
 import re
 
@@ -97,11 +98,58 @@ def start_court(model_m, model_s, model_judge, topic, rounds=3):
     print(f"{BOLD}VERDICT:{RESET}")
     print(f"{WHITE}{res_j['message']['content'].strip()}{RESET}\n")
 
+DEFAULT_TOPIC = "What is better for society: total state control or complete anarchy and absence of vertical power structure"
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run a historical court debate between Socrates and Machiavelli using Ollama models.")
+    parser.add_argument(
+        "--topic",
+        type=str,
+        default=DEFAULT_TOPIC,
+        help="Debate topic (required or use default).",
+    )
+    parser.add_argument(
+        "--rounds",
+        type=int,
+        default=2,
+        help="Number of debate rounds between the two speakers (default: 2).",
+    )
+    parser.add_argument(
+        "--model_m",
+        type=str,
+        default="llama3:latest",
+        help="Ollama model for Machiavelli (default: llama3:latest).",
+    )
+    parser.add_argument(
+        "--model_s",
+        type=str,
+        default="qwen2.5-coder:7b",
+        help="Ollama model for Socrates (default: qwen2.5-coder:7b).",
+    )
+    parser.add_argument(
+        "--judge",
+        type=str,
+        default="llama3.2:latest",
+        help="Ollama model for the judge verdict (default: llama3.2:latest).",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
+    args = parse_args()
+
+    print(f"{BOLD}Settings:{RESET}")
+    print(f"  Topic:  {args.topic}")
+    print(f"  Rounds: {args.rounds}")
+    print(f"  Machiavelli model: {args.model_m}")
+    print(f"  Socrates model:    {args.model_s}")
+    print(f"  Judge model:       {args.judge}")
+    print(f"{GRAY}{'—' * 60}{RESET}\n")
+
     start_court(
-        model_m='llama3:latest',
-        model_s='qwen2.5-coder:7b',
-        model_judge='llama3.2:latest',
-        topic='What is better for society: total state control or complete anarchy and absence of vertical power structure',
-        rounds=2
+        model_m=args.model_m,
+        model_s=args.model_s,
+        model_judge=args.judge,
+        topic=args.topic,
+        rounds=args.rounds,
     )
