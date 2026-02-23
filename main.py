@@ -4,14 +4,12 @@ import re
 from datetime import date
 
 import ollama
-
-# Color codes for terminal output
-CYAN = "\033[96m"
-YELLOW = "\033[93m"
-GRAY = "\033[90m"
-WHITE = "\033[97m"
-BOLD = "\033[1m"
-RESET = "\033[0m"
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
+console = Console()
+PANEL_WIDTH = console.width
 
 def clean_text(text):
     """Removes excessive line breaks and whitespace."""
@@ -29,14 +27,16 @@ def extract_think(text):
         
     return clean_text(think_text), clean_text(content)
 
-def print_speech(name, think, speech, color, icon):
-    """Prints a participant's speech block with formatting."""
-    print(f"{BOLD}{color}{icon} {name.upper()}:{RESET}")
+def print_speech(name, think, speech, icon, border_style):
+    """Prints a participant's speech block in a rich Panel."""
+    body = Text()
     if think:
-        print(f"{GRAY}   🔍 Thoughts: {think}{RESET}")
-    indented_speech = "\n".join([f"   {line}" for line in speech.split('\n')])
-    print(f"{WHITE}{indented_speech}{RESET}\n")
-    print(f"{GRAY}{'—' * 60}{RESET}\n")
+        body.append("🔍 Thoughts: ", style="dim")
+        body.append(think, style="dim italic")
+        body.append("\n\n")
+    body.append(speech)
+    console.print(Panel(body, title=f"{icon} {name.upper()}", border_style=border_style, width=PANEL_WIDTH))
+    console.print()
 
 def _topic_to_slug(topic):
     """Convert topic to a short filename-safe slug."""
@@ -108,54 +108,62 @@ def start_court(model_m, model_s, model_judge, topic, rounds=3):
         "num_ctx": 2048
     }
 
-    print(f"\n{BOLD}🏛  HISTORICAL COURT ON THE TOPIC:{RESET}")
-    print(f"{CYAN}«{topic}»{RESET}\n")
-    print(f"{GRAY}{'=' * 60}{RESET}\n")
+    console.print()
+    console.print(Panel(
+        f"[bold cyan]«{topic}»[/bold cyan]",
+        title="🏛  HISTORICAL COURT",
+        border_style="cyan",
+        width=PANEL_WIDTH,
+    ))
+    console.print()
 
     current_input = f"Start a debate on the topic: {topic}. State your position briefly."
 
     for i in range(rounds):
         # Machiavelli's turn
         history_m.append({"role": "user", "content": current_input})
-        res_m = ollama.chat(model=model_m, 
-                            messages=[{"role": "system", "content": prompts["Machiavelli"]}] + history_m,
-                            options=llm_options)
-        
+        with console.status("[bold magenta]Machiavelli is thinking...[/]", spinner="dots"):
+            res_m = ollama.chat(
+                model=model_m,
+                messages=[{"role": "system", "content": prompts["Machiavelli"]}] + history_m,
+                options=llm_options,
+            )
         think_m, speech_m = extract_think(res_m["message"]["content"])
         history_m.append({"role": "assistant", "content": speech_m})
         transcript_plain.append(f"Machiavelli: {speech_m}")
         transcript_entries.append({"name": "Machiavelli", "icon": "🦊", "think": think_m, "speech": speech_m})
-        
-        print_speech("Machiavelli", think_m, speech_m, YELLOW, "🦊")
+        print_speech("Machiavelli", think_m, speech_m, "🦊", "magenta")
 
         # Socrates's turn
         history_s.append({"role": "user", "content": speech_m})
-        res_s = ollama.chat(model=model_s, 
-                            messages=[{"role": "system", "content": prompts["Socrates"]}] + history_s,
-                            options=llm_options)
-        
+        with console.status("[bold cyan]Socrates is thinking...[/]", spinner="dots"):
+            res_s = ollama.chat(
+                model=model_s,
+                messages=[{"role": "system", "content": prompts["Socrates"]}] + history_s,
+                options=llm_options,
+            )
         think_s, speech_s = extract_think(res_s["message"]["content"])
         history_s.append({"role": "assistant", "content": speech_s})
         transcript_plain.append(f"Socrates: {speech_s}")
         transcript_entries.append({"name": "Socrates", "icon": "🏛", "think": think_s, "speech": speech_s})
-        
-        print_speech("Socrates", think_s, speech_s, CYAN, "🏛")
+        print_speech("Socrates", think_s, speech_s, "🏛", "cyan")
 
         current_input = speech_s
 
     # Judge's verdict
-    print(f"{BOLD}⚖️  JUDGE DELIVERING VERDICT...{RESET}\n")
-    
     judge_prompt = "You are the Supreme Judge. Analyze the debate. Who won: Socrates or Machiavelli? Answer briefly and strictly in English."
     full_text = "\n".join(transcript_plain)
-    
-    res_j = ollama.chat(model=model_judge, 
-                        messages=[{"role": "system", "content": judge_prompt}, 
-                                  {"role": "user", "content": full_text}])
-    
+    with console.status("[bold yellow]Judge is deliberating...[/]", spinner="dots"):
+        res_j = ollama.chat(
+            model=model_judge,
+            messages=[
+                {"role": "system", "content": judge_prompt},
+                {"role": "user", "content": full_text},
+            ],
+        )
     verdict_text = res_j["message"]["content"].strip()
-    print(f"{BOLD}VERDICT:{RESET}")
-    print(f"{WHITE}{verdict_text}{RESET}\n")
+    console.print(Panel(Text(verdict_text, style="bold"), title="⚖️  VERDICT", border_style="gold1", width=PANEL_WIDTH))
+    console.print()
 
     return {
         "topic": topic,
@@ -206,13 +214,16 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
 
-    print(f"{BOLD}Settings:{RESET}")
-    print(f"  Topic:  {args.topic}")
-    print(f"  Rounds: {args.rounds}")
-    print(f"  Machiavelli model: {args.model_m}")
-    print(f"  Socrates model:    {args.model_s}")
-    print(f"  Judge model:       {args.judge}")
-    print(f"{GRAY}{'—' * 60}{RESET}\n")
+    table = Table(title="Debate settings", show_header=True, header_style="bold cyan")
+    table.add_column("Setting", style="dim")
+    table.add_column("Value")
+    table.add_row("Topic", args.topic)
+    table.add_row("Rounds", str(args.rounds))
+    table.add_row("Machiavelli (model)", args.model_m)
+    table.add_row("Socrates (model)", args.model_s)
+    table.add_row("Judge (model)", args.judge)
+    console.print(table)
+    console.print()
 
     result = start_court(
         model_m=args.model_m,
@@ -229,4 +240,4 @@ if __name__ == "__main__":
         transcript_entries=result["transcript_entries"],
         verdict=result["verdict"],
     )
-    print(f"Debate saved to {filepath}")
+    console.print(f"[dim]Debate saved to {filepath}[/]")
