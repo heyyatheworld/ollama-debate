@@ -1,8 +1,10 @@
+"""Ollama Debate: historical court debate between Socrates and Machiavelli via Ollama models."""
 import argparse
 import os
 import re
 import sys
 from datetime import date
+from pathlib import Path
 
 import ollama
 import yaml
@@ -10,9 +12,10 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+
 console = Console()
 PANEL_WIDTH = console.width
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+CONFIG_PATH = Path(__file__).resolve().parent / "config.yaml"
 
 
 def _error_exit(title, message):
@@ -70,8 +73,8 @@ def ensure_models_available(model_m, model_s, model_judge):
 
 
 def load_config():
-    """Load config.yaml; exit with a Rich error if the file is missing."""
-    if not os.path.isfile(CONFIG_PATH):
+    """Load config.yaml; exit with a Rich error if the file is missing. Returns config dict."""
+    if not CONFIG_PATH.is_file():
         console.print(
             Panel(
                 f"[red]Config file not found:[/] [bold]{CONFIG_PATH}[/]\n\n"
@@ -83,12 +86,13 @@ def load_config():
             )
         )
         sys.exit(1)
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+    with open(CONFIG_PATH, encoding="utf-8") as f:
         data = yaml.safe_load(f)
     if not data:
         console.print("[red]config.yaml is empty.[/]")
         sys.exit(1)
     return data
+
 
 def clean_text(text):
     """Removes excessive line breaks and whitespace."""
@@ -178,17 +182,17 @@ def _build_markdown(topic, model_m, model_s, model_judge, transcript_entries, ve
     return "\n".join(lines)
 
 def save_debate_to_md(topic, model_m, model_s, model_judge, transcript_entries, verdict, token_stats=None, debates_dir="debates"):
-    """Save debate to debates_dir/YYYY-MM-DD_slug.md; create directory if needed. Returns path like debates_dir/filename.md.
+    """Save debate to debates_dir/YYYY-MM-DD_slug.md; create dir if missing. Returns path (str).
     Raises OSError on write failure (caller should show Rich error)."""
-    os.makedirs(debates_dir, exist_ok=True)
+    out_dir = Path(debates_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
     today = date.today().isoformat()
     slug = _topic_to_slug(topic)
     filename = f"{today}_{slug}.md"
-    filepath = os.path.join(debates_dir, filename)
+    filepath = out_dir / filename
     md = _build_markdown(topic, model_m, model_s, model_judge, transcript_entries, verdict or "", token_stats)
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(md)
-    return filepath
+    filepath.write_text(md, encoding="utf-8")
+    return str(filepath)
 
 def _make_result(topic, model_m, model_s, model_judge, transcript_entries, verdict_text, total_prompt, total_completion):
     """Build the result dict for start_court (full or partial)."""

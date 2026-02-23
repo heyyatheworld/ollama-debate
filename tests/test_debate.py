@@ -2,7 +2,7 @@
 import sys
 from datetime import date
 from pathlib import Path
-from unittest.mock import patch, mock_open
+from unittest.mock import MagicMock, patch, mock_open
 
 import pytest
 
@@ -14,10 +14,9 @@ import main as main_module
 
 def test_load_config_missing_file_exits_with_error():
     """When config.yaml does not exist, load_config exits with code 1."""
-    with patch.object(main_module, "CONFIG_PATH", "/nonexistent/config.yaml"):
-        with patch("main.os.path.isfile", return_value=False):
-            with pytest.raises(SystemExit) as exc_info:
-                main_module.load_config()
+    with patch.object(main_module, "CONFIG_PATH", Path("/nonexistent/config.yaml")):
+        with pytest.raises(SystemExit) as exc_info:
+            main_module.load_config()
     assert exc_info.value.code == 1
 
 
@@ -37,7 +36,9 @@ settings:
   debates_dir: "debates"
   num_ctx: 2048
 """
-    with patch("main.os.path.isfile", return_value=True):
+    fake_path = MagicMock()
+    fake_path.is_file.return_value = True
+    with patch.object(main_module, "CONFIG_PATH", fake_path):
         with patch("main.open", mock_open(read_data=yaml_content)):
             data = main_module.load_config()
     assert "models" in data
@@ -51,7 +52,9 @@ settings:
 
 def test_load_config_empty_yaml_exits():
     """When config file exists but is empty/invalid YAML, load_config exits."""
-    with patch("main.os.path.isfile", return_value=True):
+    fake_path = MagicMock()
+    fake_path.is_file.return_value = True
+    with patch.object(main_module, "CONFIG_PATH", fake_path):
         with patch("main.open", mock_open(read_data="")):
             with pytest.raises(SystemExit):
                 main_module.load_config()

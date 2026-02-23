@@ -1,21 +1,23 @@
 # Ollama Debate
 
+**Version:** v1.0.0  
+**Last updated:** February 2025
+
 A Python script that runs a historical court debate between two [Ollama](https://ollama.com/) models (Socrates and Machiavelli) on a topic you choose, with a third model acting as the judge to deliver a verdict.
 
 ## Requirements
 
 - [Ollama](https://ollama.com/) installed and running locally
-- Three Ollama models pulled (e.g. `llama3:latest`, `qwen2.5-coder:7b`, `llama3.2:latest`)
 - Python 3.x
-- The `ollama` Python package
+- Python dependencies: **ollama**, **rich**, **PyYAML**, **pytest** (for tests)
 
 ## Setup
 
 ```bash
-pip install ollama
+pip install -r requirements.txt
 ```
 
-Make sure Ollama is running (e.g. start the Ollama app or run `ollama serve`) and that you have pulled the models you want to use:
+Make sure Ollama is running (e.g. start the Ollama app or run `ollama serve`). Default models in `config.yaml` are `llama3:latest`, `qwen2.5-coder:7b`, and `llama3.2:latest`. Pull them if needed:
 
 ```bash
 ollama pull llama3:latest
@@ -23,21 +25,43 @@ ollama pull qwen2.5-coder:7b
 ollama pull llama3.2:latest
 ```
 
+## Usage
+
+Run with defaults from `config.yaml`:
+
+```bash
+python main.py
+```
+
+Override topic, rounds, or models via CLI (CLI takes precedence over config):
+
+```bash
+python main.py --topic "Your debate topic" --rounds 3 --model_m llama3 --model_s qwen2.5-coder:7b --judge llama3.2:latest
+```
+
+- **--topic** — Debate question or statement (default from config).
+- **--rounds** — Number of back-and-forth exchanges (default from config).
+- **--model_m** — Ollama model for Machiavelli.
+- **--model_s** — Ollama model for Socrates.
+- **--judge** — Ollama model for the Judge.
+
+You can also edit `config.yaml` to change default models, system prompts, and settings (e.g. `debates_dir`, `num_ctx`). The `debates/` folder is created automatically on first run when a debate is saved.
+
 ## Testing
 
-The project uses [pytest](https://pytest.org/) for tests. Install dependencies (including `pytest`), then run:
+Run the test suite with [pytest](https://pytest.org/):
 
 ```bash
 pytest
 ```
 
-Run with verbose output:
+Verbose:
 
 ```bash
 pytest -v
 ```
 
-Run only tests in a specific file:
+Single file:
 
 ```bash
 pytest tests/test_debate.py -v
@@ -46,53 +70,12 @@ pytest tests/test_main.py -v
 
 Tests cover config loading, log filename formatting, argument parsing, and token handling; they use mocks so no real Ollama models are started.
 
-## Usage
-
-Run the default court debate (topic and models are set in `main.py`):
-
-```bash
-python main.py
-```
-
-### Customizing in code
-
-Edit the `if __name__ == "__main__":` block in `main.py`:
-
-- **topic** — The debate question or statement.
-- **model_m** — Ollama model name for Machiavelli (pragmatic defender of state control).
-- **model_s** — Ollama model name for Socrates (uses Socratic method with probing questions).
-- **model_judge** — Ollama model name for the Judge (delivers final verdict).
-- **rounds** — Number of back-and-forth exchanges (default is 3).
-
-Example:
-
-```python
-start_court(
-    model_m='llama3:latest',
-    model_s='qwen2.5-coder:7b',
-    model_judge='llama3.2:latest',
-    topic='What is better for society: total state control or complete anarchy',
-    rounds=2
-)
-```
-
-You can also call `start_court()` from your own script with different topics and models.
-
 ## How it works
 
-1. **Character Setup**: Each model receives a character-specific system prompt:
-   - **Socrates**: Uses the Socratic method, asking short, probing questions. Humble but ironic.
-   - **Machiavelli**: A cynical pragmatist who defends state interest and order at any cost.
+1. **Character setup** — Each model receives a character-specific system prompt from `config.yaml` (Socrates: Socratic method; Machiavelli: cynical pragmatist; Judge: verdict).
 
-2. **Debate Flow**: 
-   - Machiavelli starts with an opening statement on the topic.
-   - Each round: Machiavelli replies, then Socrates responds to Machiavelli's statement.
-   - The debate continues for the specified number of rounds.
+2. **Debate flow** — Machiavelli opens; each round alternates Machiavelli → Socrates. After all rounds, the Judge model reads the transcript and delivers a verdict.
 
-3. **Judge's Verdict**: After all rounds, the Judge model analyzes the full transcript and delivers a verdict determining who won the debate.
+3. **Output** — Rich panels in the terminal (🦊 Machiavelli, 🏛 Socrates, ⚖️ Judge), token counts per reply, and a Markdown log saved under `debates/` (path configurable in `config.yaml`).
 
-4. **Output Formatting**: The script displays color-coded output with icons (🦊 for Machiavelli, 🏛 for Socrates, ⚖️ for Judge). If models include `<think>` tags in their responses, these are extracted and displayed separately as "Thoughts".
-
-5. **Performance**: The script uses optimized settings for 8GB RAM systems (limited context window and response length).
-
-Output is printed to the terminal with formatted speech blocks showing each participant's thoughts and responses.
+4. **Performance** — Default settings in config suit limited RAM (e.g. 8GB); you can adjust `num_ctx`, `num_predict`, and `temperature` in `config.yaml`.
