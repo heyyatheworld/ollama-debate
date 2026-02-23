@@ -15,6 +15,60 @@ PANEL_WIDTH = console.width
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
 
 
+def _error_exit(title, message):
+    """Print a red Rich panel and exit with code 1."""
+    console.print(Panel(message, title=f"[bold red]{title}[/]", border_style="red", width=min(72, PANEL_WIDTH)))
+    sys.exit(1)
+
+
+def _show_error(title, message):
+    """Print a red Rich panel (no exit)."""
+    console.print(Panel(message, title=f"[bold red]{title}[/]", border_style="red", width=min(72, PANEL_WIDTH)))
+
+
+def check_ollama_running():
+    """Verify Ollama server is reachable; exit with Rich error if not."""
+    try:
+        ollama.list()
+    except Exception as e:
+        _error_exit(
+            "Error: Ollama server is not running.",
+            f"[red]{e!s}[/]\n\n"
+            "Please start Ollama app or run [bold]ollama serve[/] in a terminal.",
+        )
+
+
+def _model_in_list(model_name, listed_names):
+    """Check if model_name is available (exact or as base name)."""
+    if model_name in listed_names:
+        return True
+    base = model_name.split(":")[0] if ":" in model_name else model_name
+    return any(n == model_name or n.startswith(base + ":") for n in listed_names)
+
+
+def ensure_models_available(model_m, model_s, model_judge):
+    """Ensure all three models exist; pull any missing one with rich.status."""
+    try:
+        data = ollama.list()
+    except Exception as e:
+        _error_exit("Ollama error", str(e))
+    models = data.get("models") if isinstance(data, dict) else data
+    if not isinstance(models, list):
+        models = []
+    listed_names = set()
+    for m in models:
+        name = (m.get("name") or m.get("model") or "")
+        if name:
+            listed_names.add(name)
+    for _label, model_name in [("Machiavelli", model_m), ("Socrates", model_s), ("Judge", model_judge)]:
+        if not _model_in_list(model_name, listed_names):
+            with console.status(f"Model [bold]{model_name}[/] not found. Pulling from Ollama registry...", spinner="dots"):
+                try:
+                    ollama.pull(model_name)
+                except Exception as e:
+                    _error_exit(f"Failed to pull model {model_name}", str(e))
+
+
 def load_config():
     """Load config.yaml; exit with a Rich error if the file is missing."""
     if not os.path.isfile(CONFIG_PATH):
@@ -110,7 +164,7 @@ def _build_markdown(topic, model_m, model_s, model_judge, transcript_entries, ve
         for line in speech.split("\n"):
             lines.append(f"> {line}")
         lines.append("")
-    lines.extend(["## Verdict", "", verdict.strip(), ""])
+    lines.extend(["## Verdict", "", (verdict or "").strip(), ""])
     if token_stats:
         lines.extend([
             "",
@@ -124,19 +178,38 @@ def _build_markdown(topic, model_m, model_s, model_judge, transcript_entries, ve
     return "\n".join(lines)
 
 def save_debate_to_md(topic, model_m, model_s, model_judge, transcript_entries, verdict, token_stats=None, debates_dir="debates"):
-    """Save debate to debates_dir/YYYY-MM-DD_slug.md; create directory if needed. Returns path like debates_dir/filename.md."""
+    """Save debate to debates_dir/YYYY-MM-DD_slug.md; create directory if needed. Returns path like debates_dir/filename.md.
+    Raises OSError on write failure (caller should show Rich error)."""
     os.makedirs(debates_dir, exist_ok=True)
     today = date.today().isoformat()
     slug = _topic_to_slug(topic)
     filename = f"{today}_{slug}.md"
     filepath = os.path.join(debates_dir, filename)
-    md = _build_markdown(topic, model_m, model_s, model_judge, transcript_entries, verdict, token_stats)
+    md = _build_markdown(topic, model_m, model_s, model_judge, transcript_entries, verdict or "", token_stats)
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(md)
     return filepath
 
+def _make_result(topic, model_m, model_s, model_judge, transcript_entries, verdict_text, total_prompt, total_completion):
+    """Build the result dict for start_court (full or partial)."""
+    token_stats = {
+        "prompt": total_prompt,
+        "completion": total_completion,
+        "total": total_prompt + total_completion,
+    }
+    return {
+        "topic": topic,
+        "model_m": model_m,
+        "model_s": model_s,
+        "model_judge": model_judge,
+        "transcript_entries": transcript_entries,
+        "verdict": verdict_text,
+        "token_stats": token_stats,
+    }
+
+
 def start_court(model_m, model_s, model_judge, topic, rounds=3, config_prompts=None, llm_options=None):
-    """Run the debate. config_prompts and llm_options should come from config (dicts)."""
+    """Run the debate. Returns (result_dict, interrupted_by_user)."""
     if config_prompts is None:
         config_prompts = {}
     prompts = {
@@ -167,75 +240,66 @@ def start_court(model_m, model_s, model_judge, topic, rounds=3, config_prompts=N
 
     current_input = f"Start a debate on the topic: {topic}. State your position briefly."
 
-    for i in range(rounds):
-        # Machiavelli's turn
-        history_m.append({"role": "user", "content": current_input})
-        with console.status("[bold magenta]Machiavelli is thinking...[/]", spinner="dots"):
-            res_m = ollama.chat(
-                model=model_m,
-                messages=[{"role": "system", "content": prompts["Machiavelli"]}] + history_m,
-                options=llm_options,
+    try:
+        for i in range(rounds):
+            # Machiavelli's turn
+            history_m.append({"role": "user", "content": current_input})
+            with console.status("[bold magenta]Machiavelli is thinking...[/]", spinner="dots"):
+                res_m = ollama.chat(
+                    model=model_m,
+                    messages=[{"role": "system", "content": prompts["Machiavelli"]}] + history_m,
+                    options=llm_options,
+                )
+            prompt_m, completion_m = _token_counts(res_m)
+            total_prompt += prompt_m
+            total_completion += completion_m
+            think_m, speech_m = extract_think(res_m["message"]["content"])
+            history_m.append({"role": "assistant", "content": speech_m})
+            transcript_plain.append(f"Machiavelli: {speech_m}")
+            transcript_entries.append({"name": "Machiavelli", "icon": "🦊", "think": think_m, "speech": speech_m})
+            print_speech("Machiavelli", think_m, speech_m, "🦊", "magenta", prompt_m, completion_m)
+
+            # Socrates's turn
+            history_s.append({"role": "user", "content": speech_m})
+            with console.status("[bold cyan]Socrates is thinking...[/]", spinner="dots"):
+                res_s = ollama.chat(
+                    model=model_s,
+                    messages=[{"role": "system", "content": prompts["Socrates"]}] + history_s,
+                    options=llm_options,
+                )
+            prompt_s, completion_s = _token_counts(res_s)
+            total_prompt += prompt_s
+            total_completion += completion_s
+            think_s, speech_s = extract_think(res_s["message"]["content"])
+            history_s.append({"role": "assistant", "content": speech_s})
+            transcript_plain.append(f"Socrates: {speech_s}")
+            transcript_entries.append({"name": "Socrates", "icon": "🏛", "think": think_s, "speech": speech_s})
+            print_speech("Socrates", think_s, speech_s, "🏛", "cyan", prompt_s, completion_s)
+
+            current_input = speech_s
+
+        # Judge's verdict
+        full_text = "\n".join(transcript_plain)
+        with console.status("[bold yellow]Judge is deliberating...[/]", spinner="dots"):
+            res_j = ollama.chat(
+                model=model_judge,
+                messages=[
+                    {"role": "system", "content": judge_system_prompt},
+                    {"role": "user", "content": full_text},
+                ],
             )
-        prompt_m, completion_m = _token_counts(res_m)
-        total_prompt += prompt_m
-        total_completion += completion_m
-        think_m, speech_m = extract_think(res_m["message"]["content"])
-        history_m.append({"role": "assistant", "content": speech_m})
-        transcript_plain.append(f"Machiavelli: {speech_m}")
-        transcript_entries.append({"name": "Machiavelli", "icon": "🦊", "think": think_m, "speech": speech_m})
-        print_speech("Machiavelli", think_m, speech_m, "🦊", "magenta", prompt_m, completion_m)
+        prompt_j, completion_j = _token_counts(res_j)
+        total_prompt += prompt_j
+        total_completion += completion_j
+        verdict_text = res_j["message"]["content"].strip()
+        console.print(Panel(Text(verdict_text, style="bold"), title="⚖️  VERDICT", border_style="gold1", width=PANEL_WIDTH))
+        console.print(f"[dim]Tokens: prompt: {prompt_j}, completion: {completion_j}, total: {prompt_j + completion_j}[/]")
+        console.print()
+        return _make_result(topic, model_m, model_s, model_judge, transcript_entries, verdict_text, total_prompt, total_completion), False
 
-        # Socrates's turn
-        history_s.append({"role": "user", "content": speech_m})
-        with console.status("[bold cyan]Socrates is thinking...[/]", spinner="dots"):
-            res_s = ollama.chat(
-                model=model_s,
-                messages=[{"role": "system", "content": prompts["Socrates"]}] + history_s,
-                options=llm_options,
-            )
-        prompt_s, completion_s = _token_counts(res_s)
-        total_prompt += prompt_s
-        total_completion += completion_s
-        think_s, speech_s = extract_think(res_s["message"]["content"])
-        history_s.append({"role": "assistant", "content": speech_s})
-        transcript_plain.append(f"Socrates: {speech_s}")
-        transcript_entries.append({"name": "Socrates", "icon": "🏛", "think": think_s, "speech": speech_s})
-        print_speech("Socrates", think_s, speech_s, "🏛", "cyan", prompt_s, completion_s)
-
-        current_input = speech_s
-
-    # Judge's verdict
-    full_text = "\n".join(transcript_plain)
-    with console.status("[bold yellow]Judge is deliberating...[/]", spinner="dots"):
-        res_j = ollama.chat(
-            model=model_judge,
-            messages=[
-                {"role": "system", "content": judge_system_prompt},
-                {"role": "user", "content": full_text},
-            ],
-        )
-    prompt_j, completion_j = _token_counts(res_j)
-    total_prompt += prompt_j
-    total_completion += completion_j
-    verdict_text = res_j["message"]["content"].strip()
-    console.print(Panel(Text(verdict_text, style="bold"), title="⚖️  VERDICT", border_style="gold1", width=PANEL_WIDTH))
-    console.print(f"[dim]Tokens: prompt: {prompt_j}, completion: {completion_j}, total: {prompt_j + completion_j}[/]")
-    console.print()
-
-    token_stats = {
-        "prompt": total_prompt,
-        "completion": total_completion,
-        "total": total_prompt + total_completion,
-    }
-    return {
-        "topic": topic,
-        "model_m": model_m,
-        "model_s": model_s,
-        "model_judge": model_judge,
-        "transcript_entries": transcript_entries,
-        "verdict": verdict_text,
-        "token_stats": token_stats,
-    }
+    except KeyboardInterrupt:
+        verdict_partial = "(Debate interrupted by user.)"
+        return _make_result(topic, model_m, model_s, model_judge, transcript_entries, verdict_partial, total_prompt, total_completion), True
 
 DEFAULT_TOPIC = "What is better for society: total state control or complete anarchy and absence of vertical power structure"
 
@@ -279,44 +343,61 @@ def parse_args(config):
 
 
 if __name__ == "__main__":
-    config = load_config()
-    args = parse_args(config)
+    try:
+        config = load_config()
+        args = parse_args(config)
 
-    table = Table(title="Debate settings", show_header=True, header_style="bold cyan")
-    table.add_column("Setting", style="dim")
-    table.add_column("Value")
-    table.add_row("Topic", args.topic)
-    table.add_row("Rounds", str(args.rounds))
-    table.add_row("Machiavelli (model)", args.model_m)
-    table.add_row("Socrates (model)", args.model_s)
-    table.add_row("Judge (model)", args.judge)
-    console.print(table)
-    console.print()
+        check_ollama_running()
+        ensure_models_available(args.model_m, args.model_s, args.judge)
 
-    settings = config.get("settings") or {}
-    llm_options = {
-        "num_predict": settings.get("num_predict", 350),
-        "temperature": settings.get("temperature", 0.8),
-        "num_ctx": settings.get("num_ctx", 2048),
-    }
-    result = start_court(
-        model_m=args.model_m,
-        model_s=args.model_s,
-        model_judge=args.judge,
-        topic=args.topic,
-        rounds=args.rounds,
-        config_prompts=config.get("prompts"),
-        llm_options=llm_options,
-    )
-    debates_dir = settings.get("debates_dir", "debates")
-    filepath = save_debate_to_md(
-        topic=result["topic"],
-        model_m=result["model_m"],
-        model_s=result["model_s"],
-        model_judge=result["model_judge"],
-        transcript_entries=result["transcript_entries"],
-        verdict=result["verdict"],
-        token_stats=result.get("token_stats"),
-        debates_dir=debates_dir,
-    )
-    console.print(f"[dim]Debate saved to {filepath}[/]")
+        table = Table(title="Debate settings", show_header=True, header_style="bold cyan")
+        table.add_column("Setting", style="dim")
+        table.add_column("Value")
+        table.add_row("Topic", args.topic)
+        table.add_row("Rounds", str(args.rounds))
+        table.add_row("Machiavelli (model)", args.model_m)
+        table.add_row("Socrates (model)", args.model_s)
+        table.add_row("Judge (model)", args.judge)
+        console.print(table)
+        console.print()
+
+        settings = config.get("settings") or {}
+        llm_options = {
+            "num_predict": settings.get("num_predict", 350),
+            "temperature": settings.get("temperature", 0.8),
+            "num_ctx": settings.get("num_ctx", 2048),
+        }
+        result, interrupted = start_court(
+            model_m=args.model_m,
+            model_s=args.model_s,
+            model_judge=args.judge,
+            topic=args.topic,
+            rounds=args.rounds,
+            config_prompts=config.get("prompts"),
+            llm_options=llm_options,
+        )
+        if interrupted:
+            console.print("[yellow]Debate interrupted by user. Saving partial log...[/]")
+
+        debates_dir = settings.get("debates_dir", "debates")
+        try:
+            filepath = save_debate_to_md(
+                topic=result["topic"],
+                model_m=result["model_m"],
+                model_s=result["model_s"],
+                model_judge=result["model_judge"],
+                transcript_entries=result["transcript_entries"],
+                verdict=result["verdict"],
+                token_stats=result.get("token_stats"),
+                debates_dir=debates_dir,
+            )
+            console.print(f"[dim]Debate saved to {filepath}[/]")
+        except OSError as e:
+            _show_error("Error writing debate log", f"Could not save file: {e}")
+            sys.exit(1)
+    except KeyboardInterrupt:
+        console.print("[yellow]Debate interrupted by user. Saving partial log...[/]")
+        sys.exit(130)
+    except Exception as e:
+        _show_error("Error", f"{type(e).__name__}: {e}")
+        sys.exit(1)
