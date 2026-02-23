@@ -23,6 +23,29 @@ ollama pull qwen2.5-coder:7b
 ollama pull llama3.2:latest
 ```
 
+## Testing
+
+The project uses [pytest](https://pytest.org/) for tests. Install dependencies (including `pytest`), then run:
+
+```bash
+pytest
+```
+
+Run with verbose output:
+
+```bash
+pytest -v
+```
+
+Run only tests in a specific file:
+
+```bash
+pytest tests/test_debate.py -v
+pytest tests/test_main.py -v
+```
+
+Tests cover config loading, log filename formatting, argument parsing, and token handling; they use mocks so no real Ollama models are started.
+
 ## Usage
 
 Run the default court debate (topic and models are set in `main.py`):
