@@ -1,15 +1,40 @@
 import argparse
 import os
 import re
+import sys
 from datetime import date
 
 import ollama
+import yaml
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 console = Console()
 PANEL_WIDTH = console.width
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+
+
+def load_config():
+    """Load config.yaml; exit with a Rich error if the file is missing."""
+    if not os.path.isfile(CONFIG_PATH):
+        console.print(
+            Panel(
+                f"[red]Config file not found:[/] [bold]{CONFIG_PATH}[/]\n\n"
+                "Create [bold]config.yaml[/] in the project root with [cyan]models[/], "
+                "[cyan]prompts[/], and [cyan]settings[/] sections. See the project README or "
+                "copy from an example.",
+                title="[bold red]Error[/]",
+                border_style="red",
+            )
+        )
+        sys.exit(1)
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    if not data:
+        console.print("[red]config.yaml is empty.[/]")
+        sys.exit(1)
+    return data
 
 def clean_text(text):
     """Removes excessive line breaks and whitespace."""
@@ -98,36 +123,38 @@ def _build_markdown(topic, model_m, model_s, model_judge, transcript_entries, ve
         ])
     return "\n".join(lines)
 
-def save_debate_to_md(topic, model_m, model_s, model_judge, transcript_entries, verdict, token_stats=None):
-    """Save debate to debates/YYYY-MM-DD_slug.md; create directory if needed. Returns path like debates/filename.md."""
-    os.makedirs("debates", exist_ok=True)
+def save_debate_to_md(topic, model_m, model_s, model_judge, transcript_entries, verdict, token_stats=None, debates_dir="debates"):
+    """Save debate to debates_dir/YYYY-MM-DD_slug.md; create directory if needed. Returns path like debates_dir/filename.md."""
+    os.makedirs(debates_dir, exist_ok=True)
     today = date.today().isoformat()
     slug = _topic_to_slug(topic)
     filename = f"{today}_{slug}.md"
-    filepath = os.path.join("debates", filename)
+    filepath = os.path.join(debates_dir, filename)
     md = _build_markdown(topic, model_m, model_s, model_judge, transcript_entries, verdict, token_stats)
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(md)
     return filepath
 
-def start_court(model_m, model_s, model_judge, topic, rounds=3):
+def start_court(model_m, model_s, model_judge, topic, rounds=3, config_prompts=None, llm_options=None):
+    """Run the debate. config_prompts and llm_options should come from config (dicts)."""
+    if config_prompts is None:
+        config_prompts = {}
     prompts = {
-        "Socrates": "You are Socrates. Speak English. Use Socratic method: ask short, probing questions. Be humble but ironic.",
-        "Machiavelli": "You are Machiavelli. Speak English. You are a cynical pragmatist. Defend state interest and order at any cost."
+        "Socrates": config_prompts.get("socrates", ""),
+        "Machiavelli": config_prompts.get("machiavelli", ""),
     }
+    judge_system_prompt = config_prompts.get(
+        "judge",
+        "You are the Supreme Judge. Analyze the debate. Who won: Socrates or Machiavelli? Answer briefly and strictly in English.",
+    )
+    if llm_options is None:
+        llm_options = {"num_predict": 350, "temperature": 0.8, "num_ctx": 2048}
 
     history_m = []
     history_s = []
     transcript_plain = []
     transcript_entries = []
     total_prompt, total_completion = 0, 0
-
-    # Optimized settings for 8GB RAM
-    llm_options = {
-        "num_predict": 350,
-        "temperature": 0.8,
-        "num_ctx": 2048
-    }
 
     console.print()
     console.print(Panel(
@@ -178,13 +205,12 @@ def start_court(model_m, model_s, model_judge, topic, rounds=3):
         current_input = speech_s
 
     # Judge's verdict
-    judge_prompt = "You are the Supreme Judge. Analyze the debate. Who won: Socrates or Machiavelli? Answer briefly and strictly in English."
     full_text = "\n".join(transcript_plain)
     with console.status("[bold yellow]Judge is deliberating...[/]", spinner="dots"):
         res_j = ollama.chat(
             model=model_judge,
             messages=[
-                {"role": "system", "content": judge_prompt},
+                {"role": "system", "content": judge_system_prompt},
                 {"role": "user", "content": full_text},
             ],
         )
@@ -213,7 +239,11 @@ def start_court(model_m, model_s, model_judge, topic, rounds=3):
 
 DEFAULT_TOPIC = "What is better for society: total state control or complete anarchy and absence of vertical power structure"
 
-def parse_args():
+
+def parse_args(config):
+    """Parse CLI args; defaults come from config so CLI overrides config."""
+    models = config.get("models") or {}
+    settings = config.get("settings") or {}
     parser = argparse.ArgumentParser(description="Run a historical court debate between Socrates and Machiavelli using Ollama models.")
     parser.add_argument(
         "--topic",
@@ -224,32 +254,33 @@ def parse_args():
     parser.add_argument(
         "--rounds",
         type=int,
-        default=2,
-        help="Number of debate rounds between the two speakers (default: 2).",
+        default=settings.get("default_rounds", 2),
+        help="Number of debate rounds (default from config).",
     )
     parser.add_argument(
         "--model_m",
         type=str,
-        default="llama3:latest",
-        help="Ollama model for Machiavelli (default: llama3:latest).",
+        default=models.get("machiavelli", "llama3:latest"),
+        help="Ollama model for Machiavelli (default from config).",
     )
     parser.add_argument(
         "--model_s",
         type=str,
-        default="qwen2.5-coder:7b",
-        help="Ollama model for Socrates (default: qwen2.5-coder:7b).",
+        default=models.get("socrates", "qwen2.5-coder:7b"),
+        help="Ollama model for Socrates (default from config).",
     )
     parser.add_argument(
         "--judge",
         type=str,
-        default="llama3.2:latest",
-        help="Ollama model for the judge verdict (default: llama3.2:latest).",
+        default=models.get("judge", "llama3.2:latest"),
+        help="Ollama model for the judge (default from config).",
     )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
-    args = parse_args()
+    config = load_config()
+    args = parse_args(config)
 
     table = Table(title="Debate settings", show_header=True, header_style="bold cyan")
     table.add_column("Setting", style="dim")
@@ -262,13 +293,22 @@ if __name__ == "__main__":
     console.print(table)
     console.print()
 
+    settings = config.get("settings") or {}
+    llm_options = {
+        "num_predict": settings.get("num_predict", 350),
+        "temperature": settings.get("temperature", 0.8),
+        "num_ctx": settings.get("num_ctx", 2048),
+    }
     result = start_court(
         model_m=args.model_m,
         model_s=args.model_s,
         model_judge=args.judge,
         topic=args.topic,
         rounds=args.rounds,
+        config_prompts=config.get("prompts"),
+        llm_options=llm_options,
     )
+    debates_dir = settings.get("debates_dir", "debates")
     filepath = save_debate_to_md(
         topic=result["topic"],
         model_m=result["model_m"],
@@ -277,5 +317,6 @@ if __name__ == "__main__":
         transcript_entries=result["transcript_entries"],
         verdict=result["verdict"],
         token_stats=result.get("token_stats"),
+        debates_dir=debates_dir,
     )
     console.print(f"[dim]Debate saved to {filepath}[/]")

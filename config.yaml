@@ -1,0 +1,19 @@
+# Default models per role (overridden by CLI: --model_m, --model_s, --judge)
+models:
+  machiavelli: "llama3:latest"
+  socrates: "qwen2.5-coder:7b"
+  judge: "llama3.2:latest"
+
+# System prompts for each character
+prompts:
+  socrates: "You are Socrates. Speak English. Use Socratic method: ask short, probing questions. Be humble but ironic."
+  machiavelli: "You are Machiavelli. Speak English. You are a cynical pragmatist. Defend state interest and order at any cost."
+  judge: "You are the Supreme Judge. Analyze the debate. Who won: Socrates or Machiavelli? Answer briefly and strictly in English."
+
+# Runtime and generation settings
+settings:
+  default_rounds: 2
+  debates_dir: "debates"
+  num_predict: 350
+  temperature: 0.8
+  num_ctx: 2048
