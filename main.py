@@ -27,7 +27,14 @@ def extract_think(text):
         
     return clean_text(think_text), clean_text(content)
 
-def print_speech(name, think, speech, icon, border_style):
+def _token_counts(response):
+    """Extract prompt and completion token counts from Ollama response."""
+    prompt = response.get("prompt_eval_count") or 0
+    completion = response.get("eval_count") or 0
+    return prompt, completion
+
+
+def print_speech(name, think, speech, icon, border_style, prompt_tokens=None, completion_tokens=None):
     """Prints a participant's speech block in a rich Panel."""
     body = Text()
     if think:
@@ -36,6 +43,9 @@ def print_speech(name, think, speech, icon, border_style):
         body.append("\n\n")
     body.append(speech)
     console.print(Panel(body, title=f"{icon} {name.upper()}", border_style=border_style, width=PANEL_WIDTH))
+    if prompt_tokens is not None and completion_tokens is not None:
+        total = prompt_tokens + completion_tokens
+        console.print(f"[dim]Tokens: prompt: {prompt_tokens}, completion: {completion_tokens}, total: {total}[/]")
     console.print()
 
 def _topic_to_slug(topic):
@@ -45,7 +55,7 @@ def _topic_to_slug(topic):
     slug = re.sub(r"[-\s]+", "_", slug)
     return slug[:240] if slug else "debate"
 
-def _build_markdown(topic, model_m, model_s, model_judge, transcript_entries, verdict):
+def _build_markdown(topic, model_m, model_s, model_judge, transcript_entries, verdict, token_stats=None):
     """Build full Markdown content for the debate file."""
     lines = [
         f"# Debate: {topic}",
@@ -76,16 +86,26 @@ def _build_markdown(topic, model_m, model_s, model_judge, transcript_entries, ve
             lines.append(f"> {line}")
         lines.append("")
     lines.extend(["## Verdict", "", verdict.strip(), ""])
+    if token_stats:
+        lines.extend([
+            "",
+            "## Token usage",
+            "",
+            f"- **Prompt tokens:** {token_stats['prompt']}",
+            f"- **Completion tokens:** {token_stats['completion']}",
+            f"- **Total:** {token_stats['total']}",
+            "",
+        ])
     return "\n".join(lines)
 
-def save_debate_to_md(topic, model_m, model_s, model_judge, transcript_entries, verdict):
+def save_debate_to_md(topic, model_m, model_s, model_judge, transcript_entries, verdict, token_stats=None):
     """Save debate to debates/YYYY-MM-DD_slug.md; create directory if needed. Returns path like debates/filename.md."""
     os.makedirs("debates", exist_ok=True)
     today = date.today().isoformat()
     slug = _topic_to_slug(topic)
     filename = f"{today}_{slug}.md"
     filepath = os.path.join("debates", filename)
-    md = _build_markdown(topic, model_m, model_s, model_judge, transcript_entries, verdict)
+    md = _build_markdown(topic, model_m, model_s, model_judge, transcript_entries, verdict, token_stats)
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(md)
     return filepath
@@ -100,6 +120,7 @@ def start_court(model_m, model_s, model_judge, topic, rounds=3):
     history_s = []
     transcript_plain = []
     transcript_entries = []
+    total_prompt, total_completion = 0, 0
 
     # Optimized settings for 8GB RAM
     llm_options = {
@@ -128,11 +149,14 @@ def start_court(model_m, model_s, model_judge, topic, rounds=3):
                 messages=[{"role": "system", "content": prompts["Machiavelli"]}] + history_m,
                 options=llm_options,
             )
+        prompt_m, completion_m = _token_counts(res_m)
+        total_prompt += prompt_m
+        total_completion += completion_m
         think_m, speech_m = extract_think(res_m["message"]["content"])
         history_m.append({"role": "assistant", "content": speech_m})
         transcript_plain.append(f"Machiavelli: {speech_m}")
         transcript_entries.append({"name": "Machiavelli", "icon": "🦊", "think": think_m, "speech": speech_m})
-        print_speech("Machiavelli", think_m, speech_m, "🦊", "magenta")
+        print_speech("Machiavelli", think_m, speech_m, "🦊", "magenta", prompt_m, completion_m)
 
         # Socrates's turn
         history_s.append({"role": "user", "content": speech_m})
@@ -142,11 +166,14 @@ def start_court(model_m, model_s, model_judge, topic, rounds=3):
                 messages=[{"role": "system", "content": prompts["Socrates"]}] + history_s,
                 options=llm_options,
             )
+        prompt_s, completion_s = _token_counts(res_s)
+        total_prompt += prompt_s
+        total_completion += completion_s
         think_s, speech_s = extract_think(res_s["message"]["content"])
         history_s.append({"role": "assistant", "content": speech_s})
         transcript_plain.append(f"Socrates: {speech_s}")
         transcript_entries.append({"name": "Socrates", "icon": "🏛", "think": think_s, "speech": speech_s})
-        print_speech("Socrates", think_s, speech_s, "🏛", "cyan")
+        print_speech("Socrates", think_s, speech_s, "🏛", "cyan", prompt_s, completion_s)
 
         current_input = speech_s
 
@@ -161,10 +188,19 @@ def start_court(model_m, model_s, model_judge, topic, rounds=3):
                 {"role": "user", "content": full_text},
             ],
         )
+    prompt_j, completion_j = _token_counts(res_j)
+    total_prompt += prompt_j
+    total_completion += completion_j
     verdict_text = res_j["message"]["content"].strip()
     console.print(Panel(Text(verdict_text, style="bold"), title="⚖️  VERDICT", border_style="gold1", width=PANEL_WIDTH))
+    console.print(f"[dim]Tokens: prompt: {prompt_j}, completion: {completion_j}, total: {prompt_j + completion_j}[/]")
     console.print()
 
+    token_stats = {
+        "prompt": total_prompt,
+        "completion": total_completion,
+        "total": total_prompt + total_completion,
+    }
     return {
         "topic": topic,
         "model_m": model_m,
@@ -172,6 +208,7 @@ def start_court(model_m, model_s, model_judge, topic, rounds=3):
         "model_judge": model_judge,
         "transcript_entries": transcript_entries,
         "verdict": verdict_text,
+        "token_stats": token_stats,
     }
 
 DEFAULT_TOPIC = "What is better for society: total state control or complete anarchy and absence of vertical power structure"
@@ -239,5 +276,6 @@ if __name__ == "__main__":
         model_judge=result["model_judge"],
         transcript_entries=result["transcript_entries"],
         verdict=result["verdict"],
+        token_stats=result.get("token_stats"),
     )
     console.print(f"[dim]Debate saved to {filepath}[/]")
