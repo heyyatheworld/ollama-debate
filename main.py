@@ -49,12 +49,14 @@ def _model_in_list(model_name, listed_names):
     return any(n == model_name or n.startswith(base + ":") for n in listed_names)
 
 
-def ensure_models_available(model_m, model_s, model_judge):
-    """Ensure all three models exist; pull any missing one with rich.status."""
+def ensure_models_available(model_m, model_s, model_judge, exit_on_error=True):
+    """Ensure all three models exist; pull any missing one. If exit_on_error is False, raise on error."""
     try:
         data = ollama.list()
     except Exception as e:
-        _error_exit("Ollama error", str(e))
+        if exit_on_error:
+            _error_exit("Ollama error", str(e))
+        raise RuntimeError(f"Ollama error: {e}") from e
     models = data.get("models") if isinstance(data, dict) else data
     if not isinstance(models, list):
         models = []
@@ -69,7 +71,9 @@ def ensure_models_available(model_m, model_s, model_judge):
                 try:
                     ollama.pull(model_name)
                 except Exception as e:
-                    _error_exit(f"Failed to pull model {model_name}", str(e))
+                    if exit_on_error:
+                        _error_exit(f"Failed to pull model {model_name}", str(e))
+                    raise RuntimeError(f"Failed to pull model {model_name}: {e}") from e
 
 
 def load_config():
@@ -212,8 +216,21 @@ def _make_result(topic, model_m, model_s, model_judge, transcript_entries, verdi
     }
 
 
-def start_court(model_m, model_s, model_judge, topic, rounds=3, config_prompts=None, llm_options=None):
-    """Run the debate. Returns (result_dict, interrupted_by_user)."""
+def run_debate_core(
+    model_m,
+    model_s,
+    model_judge,
+    topic,
+    rounds=3,
+    config_prompts=None,
+    llm_options=None,
+    *,
+    status_context,
+    on_speech,
+    on_verdict,
+):
+    """Run the debate loop; no Rich dependency. status_context(msg) returns a context manager.
+    on_speech(entry, prompt_tokens, completion_tokens), on_verdict(verdict_text, p, c). Returns (result_dict, interrupted)."""
     if config_prompts is None:
         config_prompts = {}
     prompts = {
@@ -232,23 +249,12 @@ def start_court(model_m, model_s, model_judge, topic, rounds=3, config_prompts=N
     transcript_plain = []
     transcript_entries = []
     total_prompt, total_completion = 0, 0
-
-    console.print()
-    console.print(Panel(
-        f"[bold cyan]«{topic}»[/bold cyan]",
-        title="🏛  HISTORICAL COURT",
-        border_style="cyan",
-        width=PANEL_WIDTH,
-    ))
-    console.print()
-
     current_input = f"Start a debate on the topic: {topic}. State your position briefly."
 
     try:
-        for i in range(rounds):
-            # Machiavelli's turn
+        for _i in range(rounds):
             history_m.append({"role": "user", "content": current_input})
-            with console.status("[bold magenta]Machiavelli is thinking...[/]", spinner="dots"):
+            with status_context("Machiavelli is thinking..."):
                 res_m = ollama.chat(
                     model=model_m,
                     messages=[{"role": "system", "content": prompts["Machiavelli"]}] + history_m,
@@ -260,12 +266,12 @@ def start_court(model_m, model_s, model_judge, topic, rounds=3, config_prompts=N
             think_m, speech_m = extract_think(res_m["message"]["content"])
             history_m.append({"role": "assistant", "content": speech_m})
             transcript_plain.append(f"Machiavelli: {speech_m}")
-            transcript_entries.append({"name": "Machiavelli", "icon": "🦊", "think": think_m, "speech": speech_m})
-            print_speech("Machiavelli", think_m, speech_m, "🦊", "magenta", prompt_m, completion_m)
+            entry_m = {"name": "Machiavelli", "icon": "🦊", "think": think_m, "speech": speech_m}
+            transcript_entries.append(entry_m)
+            on_speech(entry_m, prompt_m, completion_m)
 
-            # Socrates's turn
             history_s.append({"role": "user", "content": speech_m})
-            with console.status("[bold cyan]Socrates is thinking...[/]", spinner="dots"):
+            with status_context("Socrates is thinking..."):
                 res_s = ollama.chat(
                     model=model_s,
                     messages=[{"role": "system", "content": prompts["Socrates"]}] + history_s,
@@ -277,14 +283,14 @@ def start_court(model_m, model_s, model_judge, topic, rounds=3, config_prompts=N
             think_s, speech_s = extract_think(res_s["message"]["content"])
             history_s.append({"role": "assistant", "content": speech_s})
             transcript_plain.append(f"Socrates: {speech_s}")
-            transcript_entries.append({"name": "Socrates", "icon": "🏛", "think": think_s, "speech": speech_s})
-            print_speech("Socrates", think_s, speech_s, "🏛", "cyan", prompt_s, completion_s)
+            entry_s = {"name": "Socrates", "icon": "🏛", "think": think_s, "speech": speech_s}
+            transcript_entries.append(entry_s)
+            on_speech(entry_s, prompt_s, completion_s)
 
             current_input = speech_s
 
-        # Judge's verdict
         full_text = "\n".join(transcript_plain)
-        with console.status("[bold yellow]Judge is deliberating...[/]", spinner="dots"):
+        with status_context("Judge is deliberating..."):
             res_j = ollama.chat(
                 model=model_judge,
                 messages=[
@@ -296,14 +302,45 @@ def start_court(model_m, model_s, model_judge, topic, rounds=3, config_prompts=N
         total_prompt += prompt_j
         total_completion += completion_j
         verdict_text = res_j["message"]["content"].strip()
-        console.print(Panel(Text(verdict_text, style="bold"), title="⚖️  VERDICT", border_style="gold1", width=PANEL_WIDTH))
-        console.print(f"[dim]Tokens: prompt: {prompt_j}, completion: {completion_j}, total: {prompt_j + completion_j}[/]")
-        console.print()
+        on_verdict(verdict_text, prompt_j, completion_j)
         return _make_result(topic, model_m, model_s, model_judge, transcript_entries, verdict_text, total_prompt, total_completion), False
-
     except KeyboardInterrupt:
         verdict_partial = "(Debate interrupted by user.)"
         return _make_result(topic, model_m, model_s, model_judge, transcript_entries, verdict_partial, total_prompt, total_completion), True
+
+
+def start_court(model_m, model_s, model_judge, topic, rounds=3, config_prompts=None, llm_options=None):
+    """Run the debate with Rich console output. Returns (result_dict, interrupted_by_user)."""
+    if llm_options is None:
+        llm_options = {"num_predict": 350, "temperature": 0.8, "num_ctx": 2048}
+
+    console.print()
+    console.print(Panel(
+        f"[bold cyan]«{topic}»[/bold cyan]",
+        title="🏛  HISTORICAL COURT",
+        border_style="cyan",
+        width=PANEL_WIDTH,
+    ))
+    console.print()
+
+    def status_ctx(msg):
+        return console.status(f"[bold]{msg}[/]", spinner="dots")
+
+    def on_speech(entry, p, c):
+        name = entry["name"]
+        border = "magenta" if name == "Machiavelli" else "cyan"
+        print_speech(name, entry["think"], entry["speech"], entry["icon"], border, p, c)
+
+    def on_verdict(text, p, c):
+        console.print(Panel(Text(text, style="bold"), title="⚖️  VERDICT", border_style="gold1", width=PANEL_WIDTH))
+        console.print(f"[dim]Tokens: prompt: {p}, completion: {c}, total: {p + c}[/]")
+        console.print()
+
+    return run_debate_core(
+        model_m, model_s, model_judge, topic, rounds,
+        config_prompts=config_prompts, llm_options=llm_options,
+        status_context=status_ctx, on_speech=on_speech, on_verdict=on_verdict,
+    )
 
 DEFAULT_TOPIC = "What is better for society: total state control or complete anarchy and absence of vertical power structure"
 

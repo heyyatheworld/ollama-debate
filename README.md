@@ -9,7 +9,7 @@ A Python script that runs a historical court debate between two [Ollama](https:/
 
 - [Ollama](https://ollama.com/) installed and running locally
 - Python 3.x
-- Python dependencies: **ollama**, **rich**, **PyYAML**, **pytest** (for tests)
+- Python dependencies: **ollama**, **rich**, **PyYAML**, **pytest** (tests), **streamlit** (web UI)
 
 ## Setup
 
@@ -26,6 +26,18 @@ ollama pull llama3.2:latest
 ```
 
 ## Usage
+
+### Web UI (Streamlit)
+
+Launch the browser-based interface:
+
+```bash
+streamlit run app.py
+```
+
+Use the sidebar to set the debate topic, number of rounds, and model names (defaults come from `config.yaml`). Click **Start debate** to run. Transcript and verdict appear in the main area; the debate is saved to `debates/` when finished.
+
+### CLI
 
 Run with defaults from `config.yaml`:
 
