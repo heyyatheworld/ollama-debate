@@ -42,13 +42,13 @@ Use the sidebar to set the debate topic, number of rounds, and model names (defa
 Run with defaults from `config.yaml`:
 
 ```bash
-python main.py
+python cli.py
 ```
 
 Override topic, rounds, or models via CLI (CLI takes precedence over config):
 
 ```bash
-python main.py --topic "Your debate topic" --rounds 3 --model_m llama3 --model_s qwen2.5-coder:7b --judge llama3.2:latest
+python cli.py --topic "Your debate topic" --rounds 3 --model_m llama3 --model_s qwen2.5-coder:7b --judge llama3.2:latest
 ```
 
 - **--topic** — Debate question or statement (default from config).

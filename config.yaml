@@ -1,8 +1,8 @@
 # Default models per role (overridden by CLI: --model_m, --model_s, --judge)
 models:
-  machiavelli: "llama3.2:latest"
-  socrates: "qwen2.5-coder:3b"
-  judge: "llama3.2:latest"
+  machiavelli: "llama3.2:3b"
+  socrates: "llama3.2:3b"
+  judge: "gemma3:4b"
 
 # System prompts for each character
 prompts:

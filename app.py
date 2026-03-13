@@ -1,88 +1,73 @@
-"""Streamlit web UI for Ollama Debate."""
+"""Streamlit web UI for Ollama Debate (web interface layer)."""
 from pathlib import Path
-import sys
 
 import streamlit as st
 
-# Project root
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import main as main_module
+from arena import (
+    Arena,
+    BattleResult,
+    Participant,
+    check_ollama_running,
+    ensure_models_available,
+    load_config,
+    save_debate_to_md,
+)
 
-CONFIG_PATH = Path(__file__).resolve().parent / "config.yaml"
+
 DEBATES_DIR = "debates"
 
 
 def load_config_safe():
-    """Load config; return None and set st.error if missing."""
-    if not CONFIG_PATH.is_file():
-        st.error(f"Config file not found: {CONFIG_PATH}. Create config.yaml in the project root.")
+    """Load config for web UI; return None and report errors via Streamlit."""
+    try:
+        return load_config()
+    except FileNotFoundError as e:
+        st.error(str(e))
         return None
-    import yaml
-    with open(CONFIG_PATH, encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    if not data:
-        st.error("config.yaml is empty.")
+    except ValueError as e:
+        st.error(str(e))
         return None
-    return data
+    except Exception as e:  # pragma: no cover - defensive
+        st.error(f"Error loading config: {e}")
+        return None
 
 
-def ensure_ollama():
+def ensure_ollama() -> bool:
     """Return True if Ollama is reachable; show st.error and return False otherwise."""
     try:
-        main_module.ollama.list()
+        check_ollama_running()
         return True
     except Exception as e:
         st.error(f"Ollama server is not running: {e}. Start Ollama or run `ollama serve`.")
         return False
 
 
-def ensure_models(model_m, model_s, model_judge):
+def ensure_models(model_m: str, model_s: str, model_judge: str) -> bool:
     """Ensure models exist; pull if missing. Return True on success."""
     try:
-        main_module.ensure_models_available(model_m, model_s, model_judge, exit_on_error=False)
+        ensure_models_available(model_m, model_s, model_judge)
         return True
     except Exception as e:
         st.error(f"Model error: {e}")
         return False
 
 
-def render_speech(entry, prompt_tokens, completion_tokens):
+def render_speech(entry: dict) -> None:
     """Render one speech block in Streamlit."""
     name = entry["name"]
     icon = entry["icon"]
-    think = entry.get("think", "").strip()
+    think = (entry.get("think") or "").strip()
     speech = entry["speech"]
-    color = "#c71585" if name == "Machiavelli" else "#0696a0"
     st.markdown(f"### {icon} {name.upper()}")
     if think:
         with st.expander("🔍 Thoughts", expanded=False):
             st.caption(think)
     st.markdown(speech)
-    if prompt_tokens is not None and completion_tokens is not None:
-        total = prompt_tokens + completion_tokens
-        st.caption(f"Tokens: prompt {prompt_tokens}, completion {completion_tokens}, total {total}")
-    st.divider()
-
-
-def run_debate_ui(topic, rounds, model_m, model_s, model_judge, config_prompts, llm_options):
-    """Run debate and stream output into Streamlit."""
-    def status_ctx(msg):
-        return st.spinner(msg)
-
-    def on_speech(entry, p, c):
-        render_speech(entry, p, c)
-
-    def on_verdict(text, p, c):
-        st.markdown("### ⚖️ VERDICT")
-        st.markdown(f"**{text}**")
+    p = entry.get("prompt_tokens")
+    c = entry.get("completion_tokens")
+    if p is not None and c is not None:
         st.caption(f"Tokens: prompt {p}, completion {c}, total {p + c}")
-
-    result, interrupted = main_module.run_debate_core(
-        model_m, model_s, model_judge, topic, rounds,
-        config_prompts=config_prompts, llm_options=llm_options,
-        status_context=status_ctx, on_speech=on_speech, on_verdict=on_verdict,
-    )
-    return result, interrupted
+    st.divider()
 
 
 def main():
@@ -137,24 +122,65 @@ def main():
         "temperature": settings_cfg.get("temperature", 0.8),
         "num_ctx": settings_cfg.get("num_ctx", 2048),
     }
-    result, interrupted = run_debate_ui(
-        topic.strip(), rounds, model_m, model_s, model_judge,
-        config.get("prompts"), llm_options,
+
+    prompts_cfg = config.get("prompts") or {}
+    machiavelli = Participant(
+        name="Machiavelli",
+        model=model_m,
+        system_prompt=prompts_cfg.get(
+            "machiavelli",
+            "You are Machiavelli. Speak English. You are a cynical pragmatist. Defend state interest and order at any cost.",
+        ),
+        icon="🦊",
+    )
+    socrates = Participant(
+        name="Socrates",
+        model=model_s,
+        system_prompt=prompts_cfg.get(
+            "socrates",
+            "You are Socrates. Speak English. Use Socratic method: ask short, probing questions. Be humble but ironic.",
+        ),
+        icon="🏛",
+    )
+    judge = Participant(
+        name="Judge",
+        model=model_judge,
+        system_prompt=prompts_cfg.get(
+            "judge",
+            "You are the Supreme Judge. Analyze the debate. Who won: Socrates or Machiavelli? Answer briefly and strictly in English.",
+        ),
+        icon="⚖️",
     )
 
-    if interrupted:
+    arena = Arena(machiavelli=machiavelli, socrates=socrates, judge=judge, llm_options=llm_options)
+    result: BattleResult = arena.run_battle(topic.strip(), rounds=int(rounds))
+
+    for entry in result.transcript_entries:
+        render_speech(entry)
+
+    st.markdown("### ⚖️ VERDICT")
+    st.markdown(f"**{result.verdict}**")
+    st.caption(
+        f"Tokens: prompt {result.token_prompt}, completion {result.token_completion}, total {result.token_total}"
+    )
+
+    if result.interrupted:
         st.warning("Debate interrupted by user. Partial transcript above.")
 
     debates_dir = settings_cfg.get("debates_dir", DEBATES_DIR)
     try:
-        filepath = main_module.save_debate_to_md(
-            topic=result["topic"],
-            model_m=result["model_m"],
-            model_s=result["model_s"],
-            model_judge=result["model_judge"],
-            transcript_entries=result["transcript_entries"],
-            verdict=result["verdict"],
-            token_stats=result.get("token_stats"),
+        filepath = save_debate_to_md(
+            topic=result.topic,
+            model_m=result.machiavelli_model,
+            model_s=result.socrates_model,
+            model_judge=result.judge_model,
+            transcript_entries=result.transcript_entries,
+            verdict=result.verdict,
+            token_stats={
+                "prompt": result.token_prompt,
+                "completion": result.token_completion,
+                "total": result.token_total,
+            },
             debates_dir=debates_dir,
         )
         st.success(f"Debate saved to **{filepath}**")

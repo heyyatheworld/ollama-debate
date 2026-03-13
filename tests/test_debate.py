@@ -7,17 +7,16 @@ from unittest.mock import MagicMock, patch, mock_open
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import main as main_module
+import arena
 
 
 # --- Config loading ---
 
 def test_load_config_missing_file_exits_with_error():
-    """When config.yaml does not exist, load_config exits with code 1."""
-    with patch.object(main_module, "CONFIG_PATH", Path("/nonexistent/config.yaml")):
-        with pytest.raises(SystemExit) as exc_info:
-            main_module.load_config()
-    assert exc_info.value.code == 1
+    """When config.yaml does not exist, load_config raises FileNotFoundError."""
+    with patch.object(arena, "CONFIG_PATH", Path("/nonexistent/config.yaml")):
+        with pytest.raises(FileNotFoundError):
+            arena.load_config()
 
 
 def test_load_config_reads_valid_yaml():
@@ -38,9 +37,9 @@ settings:
 """
     fake_path = MagicMock()
     fake_path.is_file.return_value = True
-    with patch.object(main_module, "CONFIG_PATH", fake_path):
-        with patch("main.open", mock_open(read_data=yaml_content)):
-            data = main_module.load_config()
+    with patch.object(arena, "CONFIG_PATH", fake_path):
+        with patch("arena.CONFIG_PATH.open", mock_open(read_data=yaml_content)):
+            data = arena.load_config()
     assert "models" in data
     assert data["models"]["machiavelli"] == "m:latest"
     assert data["models"]["socrates"] == "s:7b"
@@ -51,13 +50,13 @@ settings:
 
 
 def test_load_config_empty_yaml_exits():
-    """When config file exists but is empty/invalid YAML, load_config exits."""
+    """When config file exists but is empty/invalid YAML, load_config raises ValueError."""
     fake_path = MagicMock()
     fake_path.is_file.return_value = True
-    with patch.object(main_module, "CONFIG_PATH", fake_path):
-        with patch("main.open", mock_open(read_data="")):
-            with pytest.raises(SystemExit):
-                main_module.load_config()
+    with patch.object(arena, "CONFIG_PATH", fake_path):
+        with patch("arena.CONFIG_PATH.open", mock_open(read_data="")):
+            with pytest.raises(ValueError):
+                arena.load_config()
 
 
 # --- Log filename formatting ---
@@ -65,7 +64,7 @@ def test_load_config_empty_yaml_exits():
 def test_log_filename_includes_date_and_slug():
     """Log filename has form YYYY-MM-DD_slug.md and uses only safe characters."""
     topic = "What is justice? Why?"
-    slug = main_module._topic_to_slug(topic)
+    slug = arena.topic_to_slug(topic)
     assert slug == "what_is_justice_why"
     today = date.today().isoformat()
     filename = f"{today}_{slug}.md"
@@ -78,17 +77,17 @@ def test_log_filename_includes_date_and_slug():
 
 def test_log_filename_no_forbidden_chars():
     """Slug strips punctuation and uses only word chars and underscores."""
-    assert main_module._topic_to_slug("Hello, World!") == "hello_world"
+    assert arena.topic_to_slug("Hello, World!") == "hello_world"
     # & and . are removed; letters (including accented) are kept
-    assert main_module._topic_to_slug("Café & Co.") == "café_co"
-    assert main_module._topic_to_slug("a-b c") == "a_b_c"
+    assert arena.topic_to_slug("Café & Co.") == "café_co"
+    assert arena.topic_to_slug("a-b c") == "a_b_c"
 
 
 def test_log_filename_fallback_for_empty_topic():
     """Empty or invalid topic yields slug 'debate' so filename is still valid."""
-    slug = main_module._topic_to_slug("")
+    slug = arena.topic_to_slug("")
     assert slug == "debate"
-    slug = main_module._topic_to_slug("???")
+    slug = arena.topic_to_slug("???")
     assert slug == "debate"
 
 
@@ -103,7 +102,7 @@ def test_token_counts_from_response_dict():
         "prompt_eval_count": 42,
         "eval_count": 15,
     }
-    prompt, completion = main_module._token_counts(mock_response)
+    prompt, completion = arena.token_counts(mock_response)
     assert prompt == 42
     assert completion == 15
 
@@ -111,7 +110,7 @@ def test_token_counts_from_response_dict():
 def test_token_counts_missing_keys_default_to_zero():
     """_token_counts returns 0 for missing prompt_eval_count or eval_count."""
     mock_response = {"message": {"content": "Hi"}}
-    prompt, completion = main_module._token_counts(mock_response)
+    prompt, completion = arena.token_counts(mock_response)
     assert prompt == 0
     assert completion == 0
 
@@ -119,7 +118,7 @@ def test_token_counts_missing_keys_default_to_zero():
 def test_token_counts_none_values_treated_as_zero():
     """_token_counts treats None as 0 (response.get can return None)."""
     mock_response = {"prompt_eval_count": None, "eval_count": None}
-    prompt, completion = main_module._token_counts(mock_response)
+    prompt, completion = arena.token_counts(mock_response)
     assert prompt == 0
     assert completion == 0
 
@@ -138,9 +137,9 @@ def test_processing_mocked_ollama_chat_response():
         "prompt_eval_count": 100,
         "eval_count": 25,
     }
-    prompt, completion = main_module._token_counts(fake_response)
+    prompt, completion = arena.token_counts(fake_response)
     assert prompt == 100
     assert completion == 25
-    think, speech = main_module.extract_think(fake_response["message"]["content"])
+    think, speech = arena.extract_think(fake_response["message"]["content"])
     assert "Considering" in think
     assert "Order is preferable" in speech
