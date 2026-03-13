@@ -200,30 +200,33 @@ def main() -> None:
     )
     console.print()
 
+    def on_speech(entry: Dict[str, Any]) -> None:
+        _print_speech(entry)
+
+    def on_verdict(text: str, p: int, c: int) -> None:
+        console.print(
+            Panel(
+                Text(text, style="bold"),
+                title="⚖️  VERDICT",
+                border_style="gold1",
+                width=PANEL_WIDTH,
+            )
+        )
+        console.print(f"[dim]Tokens: prompt: {p}, completion: {c}, total: {p + c}[/]")
+        console.print()
+
     try:
-        result: BattleResult = arena.run_battle(args.topic, rounds=int(args.rounds))
+        result: BattleResult = arena.run_battle(
+            args.topic,
+            rounds=int(args.rounds),
+            on_speech=on_speech,
+            on_verdict=on_verdict,
+        )
     except KeyboardInterrupt:  # pragma: no cover - interactive
         console.print("[yellow]Debate interrupted by user.[/]")
         sys.exit(130)
     except Exception as e:  # pragma: no cover - defensive
         _error_exit(f"Unexpected error while running debate: {e}")
-
-    for entry in result.transcript_entries:
-        _print_speech(entry)
-
-    console.print(
-        Panel(
-            Text(result.verdict, style="bold"),
-            title="⚖️  VERDICT",
-            border_style="gold1",
-            width=PANEL_WIDTH,
-        )
-    )
-    console.print(
-        f"[dim]Tokens: prompt: {result.token_prompt}, completion: {result.token_completion}, "
-        f"total: {result.token_total}[/]"
-    )
-    console.print()
 
     debates_dir = settings.get("debates_dir", "debates")
     try:

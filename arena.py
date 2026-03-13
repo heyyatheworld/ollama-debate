@@ -223,8 +223,19 @@ class Arena:
         self.judge = judge
         self.llm_options = llm_options or {"num_predict": 350, "temperature": 0.8, "num_ctx": 2048}
 
-    def run_battle(self, topic: str, rounds: int = 3) -> BattleResult:
-        """Run the full debate loop and return a BattleResult."""
+    def run_battle(
+        self,
+        topic: str,
+        rounds: int = 3,
+        on_speech: Optional[Any] = None,
+        on_verdict: Optional[Any] = None,
+    ) -> BattleResult:
+        """Run the full debate loop and return a BattleResult.
+
+        If on_speech is provided, it is called after each participant reply with
+        the transcript entry dict. If on_verdict is provided, it is called once
+        with (verdict_text, prompt_tokens, completion_tokens) for the judge.
+        """
         history_m: List[Dict[str, str]] = []
         history_s: List[Dict[str, str]] = []
         transcript_plain: List[str] = []
@@ -258,6 +269,8 @@ class Arena:
                     "completion_tokens": completion_m,
                 }
                 transcript_entries.append(entry_m)
+                if on_speech is not None:
+                    on_speech(entry_m)
 
                 # Socrates turn
                 history_s.append({"role": "user", "content": speech_m})
@@ -281,6 +294,8 @@ class Arena:
                     "completion_tokens": completion_s,
                 }
                 transcript_entries.append(entry_s)
+                if on_speech is not None:
+                    on_speech(entry_s)
 
                 current_input = speech_s
 
@@ -297,6 +312,8 @@ class Arena:
             total_prompt += prompt_j
             total_completion += completion_j
             verdict_text = res_j["message"]["content"].strip()
+            if on_verdict is not None:
+                on_verdict(verdict_text, prompt_j, completion_j)
             return BattleResult(
                 topic=topic,
                 machiavelli_model=self.machiavelli.model,

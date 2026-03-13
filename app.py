@@ -153,15 +153,21 @@ def main():
     )
 
     arena = Arena(machiavelli=machiavelli, socrates=socrates, judge=judge, llm_options=llm_options)
-    result: BattleResult = arena.run_battle(topic.strip(), rounds=int(rounds))
+    collected_result: dict = {}
 
-    for entry in result.transcript_entries:
+    def on_speech(entry: dict) -> None:
         render_speech(entry)
 
-    st.markdown("### ⚖️ VERDICT")
-    st.markdown(f"**{result.verdict}**")
-    st.caption(
-        f"Tokens: prompt {result.token_prompt}, completion {result.token_completion}, total {result.token_total}"
+    def on_verdict(text: str, p: int, c: int) -> None:
+        st.markdown("### ⚖️ VERDICT")
+        st.markdown(f"**{text}**")
+        st.caption(f"Tokens: prompt {p}, completion {c}, total {p + c}")
+
+    result: BattleResult = arena.run_battle(
+        topic.strip(),
+        rounds=int(rounds),
+        on_speech=on_speech,
+        on_verdict=on_verdict,
     )
 
     if result.interrupted:
