@@ -99,6 +99,7 @@ def main():
         model_s = st.text_input("Socrates model", value=models_cfg.get("socrates", "qwen2.5-coder:7b"))
         model_judge = st.text_input("Judge model", value=models_cfg.get("judge", "llama3.2:latest"))
         st.divider()
+        stream_output = st.checkbox("Stream model output", value=False)
         run_clicked = st.button("Start debate", type="primary", use_container_width=True)
         st.caption("Ollama must be running. Missing models will be pulled on first run.")
 
@@ -120,6 +121,8 @@ def main():
     st.markdown("---")
     st.markdown(f"**Topic:** {topic}")
     st.markdown(f"*Rounds: {rounds} · Machiavelli: {model_m} · Socrates: {model_s} · Judge: {model_judge}*")
+    if stream_output:
+        st.caption("Streaming shows partial text as it arrives; the full reply is still rendered below when each turn completes.")
     st.divider()
 
     llm_options = llm_options_from_config(config)
@@ -137,6 +140,17 @@ def main():
     total_llm_steps = n_rounds * 2 + 1
     speech_idx = 0
 
+    stream_area = st.empty()
+    stream_accum = {"text": ""}
+
+    def on_stream_begin(role: str) -> None:
+        stream_accum["text"] = ""
+        stream_area.markdown(f"**{role}** is generating…")
+
+    def on_stream_chunk(role: str, delta: str) -> None:
+        stream_accum["text"] += delta
+        stream_area.markdown(f"### {role}\n\n{stream_accum['text']}▍")
+
     prog = st.progress(0, text="Preparing debate…")
     with st.status("Debate in progress…", expanded=True) as run_status:
         def on_speech(entry: SpeechTurn) -> None:
@@ -151,6 +165,8 @@ def main():
                 min(speech_idx / total_llm_steps, 1.0),
                 text=f"Round {round_num}/{n_rounds} · {entry.name}",
             )
+            if stream_output:
+                stream_area.empty()
             render_speech(entry, round_num=round_num, total_rounds=n_rounds)
 
         def on_verdict(text: str, p: int, c: int) -> None:
@@ -158,6 +174,8 @@ def main():
             speech_idx += 1
             prog.progress(1.0, text="Judge verdict")
             run_status.update(label="Judge finished", state="running")
+            if stream_output:
+                stream_area.empty()
             st.markdown("### ⚖️ VERDICT")
             st.markdown(f"**{text}**")
             st.caption(
@@ -170,6 +188,9 @@ def main():
             rounds=n_rounds,
             on_speech=on_speech,
             on_verdict=on_verdict,
+            stream=stream_output,
+            on_stream_begin=on_stream_begin if stream_output else None,
+            on_stream_chunk=on_stream_chunk if stream_output else None,
         )
 
         run_status.update(label="Debate finished", state="complete")

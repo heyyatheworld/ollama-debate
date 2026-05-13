@@ -33,7 +33,7 @@ Launch the browser-based interface:
 streamlit run app.py
 ```
 
-Use the sidebar to set the debate topic, number of rounds, and model names (defaults come from `config.yaml`). Click **Start debate** to run. The main area shows progress, each reply with round and token hints, the verdict, session token totals, and **Download transcript (.md)** plus an optional **Markdown preview**. The debate is also saved under `debates/` when the run finishes (unless I/O fails; download still works from in-memory markdown).
+Use the sidebar to set the debate topic, number of rounds, and model names (defaults come from `config.yaml`). Optional **Stream model output** streams partial tokens into the main pane before each turn’s final card. Click **Start debate** to run. The main area shows progress, each reply with round and token hints, the verdict, session token totals, and **Download transcript (.md)** plus an optional **Markdown preview**. The debate is also saved under `debates/` when the run finishes (unless I/O fails; download still works from in-memory markdown).
 
 ### CLI
 
@@ -110,8 +110,8 @@ flowchart TD
 
 2. **Debate flow** — For each round: Machiavelli replies to the current prompt, then Socrates replies to Machiavelli’s last speech. Separate chat histories are kept per character. After all rounds, the Judge receives the plain transcript and returns a verdict.
 
-3. **Callbacks** — `on_speech` runs after every debater reply (not the judge). `on_verdict` runs once with the judge’s token counts for that call only; **`BattleResult`** aggregates prompt and completion tokens across **all** calls in the session.
+3. **Callbacks** — `on_speech` runs after every debater reply (not the judge). `on_verdict` runs once with the judge’s token counts for that call only; **`BattleResult`** aggregates prompt and completion tokens across **all** calls in the session. With **`Arena.run_battle(..., stream=True)`**, optional **`on_stream_begin(role)`** and **`on_stream_chunk(role, delta)`** receive Ollama stream chunks; the Streamlit app exposes this via a **Stream model output** checkbox (CLI keeps non-streaming output by default).
 
-4. **Output** — CLI: Rich panels, optional round rules, **`--token-table`**. Streamlit: progress, status, per-reply and session token captions, file save, download button, markdown preview. Markdown logs under `debates/` (directory from `config.yaml`).
+4. **Output** — CLI: Rich panels, optional round rules, **`--token-table`**. Streamlit: progress, status, optional streaming preview, per-reply and session token captions, file save, download button, markdown preview. Markdown logs under `debates/` (directory from `config.yaml`).
 
 5. **Performance** — Tune `num_ctx`, `num_predict`, and `temperature` in `config.yaml` for your hardware.

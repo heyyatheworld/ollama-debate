@@ -5,7 +5,7 @@ This module is the single source of debate semantics and file export:
 - **Config** — `load_config`, `check_ollama_running`, `ensure_models_available`.
 - **Setup from YAML** — `build_participants`, `llm_options_from_config` (shared by CLI and Streamlit).
 - **Domain types** — `Participant`, `SpeechTurn` (one debater reply), `BattleResult` (transcript + verdict + token sums).
-- **Orchestration** — `Arena.run_battle`: for each round, Machiavelli then Socrates via `ollama.chat`; then the Judge on the full plain transcript. Optional `on_speech` / `on_verdict` hooks allow UIs to stream output without importing Ollama in the front ends.
+- **Orchestration** — `Arena.run_battle`: for each round, Machiavelli then Socrates via `ollama.chat`; then the Judge on the full plain transcript. Optional `on_speech` / `on_verdict` hooks allow UIs to stream output without importing Ollama in the front ends. With ``stream=True``, Ollama returns chunked responses; optional ``on_stream_begin`` / ``on_stream_chunk`` expose deltas before the full reply is finalized.
 - **Artifacts** — `build_markdown`, `save_debate_to_md` (filename `YYYY-MM-DD_slug.md` under a configurable directory).
 
 CLI and web UI only construct `Arena`, wire callbacks, and call save/download helpers; they do not duplicate the turn loop.
@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import ollama
 import yaml
@@ -59,11 +59,58 @@ def extract_think(text: str) -> Tuple[str, str]:
     return clean_text(think_text), clean_text(content)
 
 
-def token_counts(response: Dict[str, Any]) -> Tuple[int, int]:
+def token_counts(response: Any) -> Tuple[int, int]:
     """Extract prompt and completion token counts from an Ollama response dict."""
     prompt = response.get("prompt_eval_count") or 0
     completion = response.get("eval_count") or 0
     return int(prompt), int(completion)
+
+
+def _chunk_assistant_delta(chunk: Any) -> str:
+    """Return incremental assistant ``content`` from one streamed chat chunk."""
+    msg = chunk.get("message") if hasattr(chunk, "get") else getattr(chunk, "message", None)
+    if msg is None:
+        return ""
+    if hasattr(msg, "get"):
+        return msg.get("content") or ""
+    return getattr(msg, "content", None) or ""
+
+
+def _chat_message_and_token_totals(
+    model: str,
+    messages: List[Dict[str, str]],
+    options: Optional[Dict[str, Any]],
+    *,
+    stream: bool,
+    role_name: str,
+    on_stream_begin: Optional[Callable[[str], None]],
+    on_stream_chunk: Optional[Callable[[str, str], None]],
+) -> Tuple[str, int, int]:
+    """Run ``ollama.chat`` once; return assistant text and token counts."""
+    if not stream:
+        res: Any = ollama.chat(model=model, messages=messages, options=options)
+        text = res["message"]["content"]
+        p, c = token_counts(res)
+        return text, p, c
+
+    if on_stream_begin is not None:
+        on_stream_begin(role_name)
+
+    stream_iter = ollama.chat(model=model, messages=messages, options=options, stream=True)
+    parts: List[str] = []
+    last: Any = None
+    for chunk in stream_iter:
+        last = chunk
+        piece = _chunk_assistant_delta(chunk)
+        if piece:
+            parts.append(piece)
+            if on_stream_chunk is not None:
+                on_stream_chunk(role_name, piece)
+
+    if last is None:
+        return "", 0, 0
+    p, c = token_counts(last)
+    return "".join(parts), p, c
 
 
 def topic_to_slug(topic: str) -> str:
@@ -290,7 +337,8 @@ class Arena:
 
     Front ends should use `build_participants` and `llm_options_from_config`
     with a loaded config dict, then pass the resulting `Participant` instances
-    and options into this class.
+    and options into this class. Pass ``stream=True`` and optional stream
+    callbacks on ``run_battle`` when the UI should show token-by-token output.
     """
 
     def __init__(
@@ -311,6 +359,10 @@ class Arena:
         rounds: int = 3,
         on_speech: Optional[Any] = None,
         on_verdict: Optional[Any] = None,
+        *,
+        stream: bool = False,
+        on_stream_begin: Optional[Callable[[str], None]] = None,
+        on_stream_chunk: Optional[Callable[[str, str], None]] = None,
     ) -> BattleResult:
         """Run `rounds` exchanges (each exchange: Machiavelli, then Socrates), then the Judge.
 
@@ -332,6 +384,14 @@ class Arena:
         a placeholder verdict string, and whatever transcript was built so far (no
         ``on_verdict`` call in that path).
 
+        **Streaming**
+
+        If ``stream`` is True, ``ollama.chat`` runs with ``stream=True``. Optional
+        ``on_stream_begin(role_name)`` runs before each streamed reply; optional
+        ``on_stream_chunk(role_name, delta)`` runs for each non-empty content
+        fragment (same ``role_name`` as the participant or ``Judge``). Full text
+        is still passed to ``on_speech`` / ``on_verdict`` after the stream ends.
+
         Returns:
             ``BattleResult`` with models used, ``transcript_entries`` (debater turns only),
             ``verdict`` text, aggregated token fields, and ``interrupted`` flag.
@@ -349,15 +409,18 @@ class Arena:
             for _i in range(rounds):
                 # Machiavelli turn
                 history_m.append({"role": "user", "content": current_input})
-                res_m = ollama.chat(
-                    model=self.machiavelli.model,
-                    messages=[{"role": "system", "content": self.machiavelli.system_prompt}] + history_m,
-                    options=self.llm_options,
+                raw_m, prompt_m, completion_m = _chat_message_and_token_totals(
+                    self.machiavelli.model,
+                    [{"role": "system", "content": self.machiavelli.system_prompt}] + history_m,
+                    self.llm_options,
+                    stream=stream,
+                    role_name=self.machiavelli.name,
+                    on_stream_begin=on_stream_begin,
+                    on_stream_chunk=on_stream_chunk,
                 )
-                prompt_m, completion_m = token_counts(res_m)
                 total_prompt += prompt_m
                 total_completion += completion_m
-                think_m, speech_m = extract_think(res_m["message"]["content"])
+                think_m, speech_m = extract_think(raw_m)
                 history_m.append({"role": "assistant", "content": speech_m})
                 transcript_plain.append(f"{self.machiavelli.name}: {speech_m}")
                 entry_m = SpeechTurn(
@@ -374,15 +437,18 @@ class Arena:
 
                 # Socrates turn
                 history_s.append({"role": "user", "content": speech_m})
-                res_s = ollama.chat(
-                    model=self.socrates.model,
-                    messages=[{"role": "system", "content": self.socrates.system_prompt}] + history_s,
-                    options=self.llm_options,
+                raw_s, prompt_s, completion_s = _chat_message_and_token_totals(
+                    self.socrates.model,
+                    [{"role": "system", "content": self.socrates.system_prompt}] + history_s,
+                    self.llm_options,
+                    stream=stream,
+                    role_name=self.socrates.name,
+                    on_stream_begin=on_stream_begin,
+                    on_stream_chunk=on_stream_chunk,
                 )
-                prompt_s, completion_s = token_counts(res_s)
                 total_prompt += prompt_s
                 total_completion += completion_s
-                think_s, speech_s = extract_think(res_s["message"]["content"])
+                think_s, speech_s = extract_think(raw_s)
                 history_s.append({"role": "assistant", "content": speech_s})
                 transcript_plain.append(f"{self.socrates.name}: {speech_s}")
                 entry_s = SpeechTurn(
@@ -401,17 +467,21 @@ class Arena:
 
             # Judge verdict
             full_text = "\n".join(transcript_plain)
-            res_j = ollama.chat(
-                model=self.judge.model,
-                messages=[
+            raw_j, prompt_j, completion_j = _chat_message_and_token_totals(
+                self.judge.model,
+                [
                     {"role": "system", "content": self.judge.system_prompt},
                     {"role": "user", "content": full_text},
                 ],
+                self.llm_options,
+                stream=stream,
+                role_name=self.judge.name,
+                on_stream_begin=on_stream_begin,
+                on_stream_chunk=on_stream_chunk,
             )
-            prompt_j, completion_j = token_counts(res_j)
             total_prompt += prompt_j
             total_completion += completion_j
-            verdict_text = res_j["message"]["content"].strip()
+            verdict_text = raw_j.strip()
             if on_verdict is not None:
                 on_verdict(verdict_text, prompt_j, completion_j)
             return BattleResult(

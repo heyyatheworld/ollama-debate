@@ -139,6 +139,37 @@ def test_token_counts_none_values_treated_as_zero():
     assert completion == 0
 
 
+@patch("arena.ollama.chat")
+def test_chat_message_streaming_accumulates_text_and_tokens(mock_chat):
+    """Streaming chat concatenates deltas and reads token counts from the final chunk."""
+    mock_chat.return_value = iter(
+        [
+            {"message": {"content": "Hel"}},
+            {"message": {"content": "lo"}},
+            {"message": {"content": ""}, "prompt_eval_count": 9, "eval_count": 2},
+        ]
+    )
+    chunks: list[tuple[str, str]] = []
+    text, p, c = arena._chat_message_and_token_totals(
+        "m",
+        [{"role": "user", "content": "x"}],
+        {"num_predict": 10},
+        stream=True,
+        role_name="TestRole",
+        on_stream_begin=lambda r: chunks.append(("begin", r)),
+        on_stream_chunk=lambda r, d: chunks.append((r, d)),
+    )
+    assert text == "Hello"
+    assert p == 9
+    assert c == 2
+    assert ("begin", "TestRole") in chunks
+    assert chunks.count(("TestRole", "Hel")) == 1
+    assert chunks.count(("TestRole", "lo")) == 1
+    mock_chat.assert_called_once()
+    call_kw = mock_chat.call_args.kwargs
+    assert call_kw.get("stream") is True
+
+
 # --- Mocked Ollama API response: full flow ---
 
 def test_processing_mocked_ollama_chat_response():
