@@ -14,12 +14,13 @@ from rich.text import Text
 from arena import (
     Arena,
     BattleResult,
-    Participant,
-    SpeechTurn,
+    build_participants,
     check_ollama_running,
     ensure_models_available,
+    llm_options_from_config,
     load_config,
     save_debate_to_md,
+    SpeechTurn,
 )
 
 
@@ -153,39 +154,13 @@ def main() -> None:
     _print_settings_table(args)
 
     settings = config.get("settings") or {}
-    llm_options = {
-        "num_predict": settings.get("num_predict", 350),
-        "temperature": settings.get("temperature", 0.8),
-        "num_ctx": settings.get("num_ctx", 2048),
-    }
-    prompts = config.get("prompts") or {}
+    llm_options = llm_options_from_config(config)
 
-    machiavelli = Participant(
-        name="Machiavelli",
-        model=args.model_m,
-        system_prompt=prompts.get(
-            "machiavelli",
-            "You are Machiavelli. Speak English. You are a cynical pragmatist. Defend state interest and order at any cost.",
-        ),
-        icon="🦊",
-    )
-    socrates = Participant(
-        name="Socrates",
-        model=args.model_s,
-        system_prompt=prompts.get(
-            "socrates",
-            "You are Socrates. Speak English. Use Socratic method: ask short, probing questions. Be humble but ironic.",
-        ),
-        icon="🏛",
-    )
-    judge = Participant(
-        name="Judge",
-        model=args.judge,
-        system_prompt=prompts.get(
-            "judge",
-            "You are the Supreme Judge. Analyze the debate. Who won: Socrates or Machiavelli? Answer briefly and strictly in English.",
-        ),
-        icon="⚖️",
+    machiavelli, socrates, judge = build_participants(
+        config,
+        model_m=args.model_m,
+        model_s=args.model_s,
+        model_judge=args.judge,
     )
 
     arena = Arena(machiavelli=machiavelli, socrates=socrates, judge=judge, llm_options=llm_options)

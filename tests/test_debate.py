@@ -115,6 +115,22 @@ def test_token_counts_missing_keys_default_to_zero():
     assert completion == 0
 
 
+def test_build_participants_and_llm_options_from_config():
+    """Participants and LLM options are derived from config with correct defaults and overrides."""
+    cfg = {
+        "prompts": {"machiavelli": "Custom M prompt"},
+        "settings": {"num_predict": 100, "temperature": 0.5, "num_ctx": 4096},
+    }
+    m, s, j = arena.build_participants(cfg, model_m="m1", model_s="s1", model_judge="j1")
+    assert m.model == "m1" and m.system_prompt == "Custom M prompt"
+    assert s.model == "s1" and "Socrates" in s.system_prompt
+    assert j.model == "j1" and "Supreme Judge" in j.system_prompt
+    opts = arena.llm_options_from_config(cfg)
+    assert opts == {"num_predict": 100, "temperature": 0.5, "num_ctx": 4096}
+    empty = arena.llm_options_from_config({})
+    assert empty == {"num_predict": 350, "temperature": 0.8, "num_ctx": 2048}
+
+
 def test_token_counts_none_values_treated_as_zero():
     """_token_counts treats None as 0 (response.get can return None)."""
     mock_response = {"prompt_eval_count": None, "eval_count": None}

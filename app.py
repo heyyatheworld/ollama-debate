@@ -6,12 +6,13 @@ import streamlit as st
 from arena import (
     Arena,
     BattleResult,
-    Participant,
-    SpeechTurn,
+    build_participants,
     check_ollama_running,
     ensure_models_available,
+    llm_options_from_config,
     load_config,
     save_debate_to_md,
+    SpeechTurn,
 )
 
 
@@ -118,39 +119,13 @@ def main():
     st.markdown(f"*Rounds: {rounds} · Machiavelli: {model_m} · Socrates: {model_s} · Judge: {model_judge}*")
     st.divider()
 
-    llm_options = {
-        "num_predict": settings_cfg.get("num_predict", 350),
-        "temperature": settings_cfg.get("temperature", 0.8),
-        "num_ctx": settings_cfg.get("num_ctx", 2048),
-    }
+    llm_options = llm_options_from_config(config)
 
-    prompts_cfg = config.get("prompts") or {}
-    machiavelli = Participant(
-        name="Machiavelli",
-        model=model_m,
-        system_prompt=prompts_cfg.get(
-            "machiavelli",
-            "You are Machiavelli. Speak English. You are a cynical pragmatist. Defend state interest and order at any cost.",
-        ),
-        icon="🦊",
-    )
-    socrates = Participant(
-        name="Socrates",
-        model=model_s,
-        system_prompt=prompts_cfg.get(
-            "socrates",
-            "You are Socrates. Speak English. Use Socratic method: ask short, probing questions. Be humble but ironic.",
-        ),
-        icon="🏛",
-    )
-    judge = Participant(
-        name="Judge",
-        model=model_judge,
-        system_prompt=prompts_cfg.get(
-            "judge",
-            "You are the Supreme Judge. Analyze the debate. Who won: Socrates or Machiavelli? Answer briefly and strictly in English.",
-        ),
-        icon="⚖️",
+    machiavelli, socrates, judge = build_participants(
+        config,
+        model_m=model_m,
+        model_s=model_s,
+        model_judge=model_judge,
     )
 
     arena = Arena(machiavelli=machiavelli, socrates=socrates, judge=judge, llm_options=llm_options)

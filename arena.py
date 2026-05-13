@@ -3,6 +3,7 @@
 This module contains:
 - Config and environment helpers (config.yaml, Ollama availability, models).
 - Pure debate logic in the Arena class (no CLI or web UI code).
+- Helpers to build participants and LLM options from config (shared by CLI and UI).
 - Utilities for saving debate transcripts to Markdown.
 """
 
@@ -19,6 +20,21 @@ import re
 
 
 CONFIG_PATH = Path(__file__).resolve().parent / "config.yaml"
+
+_DEFAULT_PROMPTS: Dict[str, str] = {
+    "machiavelli": (
+        "You are Machiavelli. Speak English. You are a cynical pragmatist. "
+        "Defend state interest and order at any cost."
+    ),
+    "socrates": (
+        "You are Socrates. Speak English. Use Socratic method: ask short, probing questions. "
+        "Be humble but ironic."
+    ),
+    "judge": (
+        "You are the Supreme Judge. Analyze the debate. Who won: Socrates or Machiavelli? "
+        "Answer briefly and strictly in English."
+    ),
+}
 
 
 def clean_text(text: str) -> str:
@@ -187,6 +203,46 @@ class Participant:
     model: str
     system_prompt: str
     icon: str = ""
+
+
+def build_participants(
+    config: Dict[str, Any],
+    *,
+    model_m: str,
+    model_s: str,
+    model_judge: str,
+) -> Tuple[Participant, Participant, Participant]:
+    """Build Machiavelli, Socrates, and Judge from config prompts and the given models."""
+    prompts = config.get("prompts") or {}
+    machiavelli = Participant(
+        name="Machiavelli",
+        model=model_m,
+        system_prompt=prompts.get("machiavelli", _DEFAULT_PROMPTS["machiavelli"]),
+        icon="🦊",
+    )
+    socrates = Participant(
+        name="Socrates",
+        model=model_s,
+        system_prompt=prompts.get("socrates", _DEFAULT_PROMPTS["socrates"]),
+        icon="🏛",
+    )
+    judge = Participant(
+        name="Judge",
+        model=model_judge,
+        system_prompt=prompts.get("judge", _DEFAULT_PROMPTS["judge"]),
+        icon="⚖️",
+    )
+    return machiavelli, socrates, judge
+
+
+def llm_options_from_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Derive Ollama chat options from config settings (same defaults as Arena)."""
+    settings = config.get("settings") or {}
+    return {
+        "num_predict": settings.get("num_predict", 350),
+        "temperature": settings.get("temperature", 0.8),
+        "num_ctx": settings.get("num_ctx", 2048),
+    }
 
 
 @dataclass
