@@ -61,6 +61,17 @@ def test_parse_args_uses_config_defaults():
     assert args.model_s == "custom-s:7b"
     assert args.judge == "custom-j:latest"
     assert args.rounds == 5
+    assert args.token_table is False
+
+
+def test_parse_args_token_table_flag():
+    """--token-table sets token_table to True."""
+    from cli import parse_args
+
+    config = {"models": {}, "settings": {}}
+    with patch.object(sys, "argv", ["cli.py", "--token-table"]):
+        args = parse_args(config)
+    assert args.token_table is True
 
 
 def test_parse_args_cli_overrides_config():

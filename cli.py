@@ -58,7 +58,7 @@ def _print_settings_table(args: argparse.Namespace) -> None:
     console.print()
 
 
-def _print_speech(entry: SpeechTurn) -> None:
+def _print_speech(entry: SpeechTurn, *, round_num: int, total_rounds: int) -> None:
     """Print one participant's speech in a Rich panel."""
     name = entry.name
     icon = entry.icon
@@ -77,14 +77,45 @@ def _print_speech(entry: SpeechTurn) -> None:
         Panel(
             body,
             title=f"{icon} {name.upper()}",
+            subtitle=f"Round {round_num} of {total_rounds}",
+            subtitle_align="right",
             border_style=border_style,
             width=PANEL_WIDTH,
         )
     )
     p = entry.prompt_tokens
     c = entry.completion_tokens
-    if p is not None and c is not None:
-        console.print(f"[dim]Tokens: prompt: {p}, completion: {c}, total: {p + c}[/]")
+    console.print(f"[dim]This reply — prompt: {p}, completion: {c}, subtotal: {p + c}[/]")
+    console.print()
+
+
+def _print_token_usage_table(rows: list[Dict[str, Any]]) -> None:
+    """Print a Rich table of per-call token usage (round, speaker, counts)."""
+    table = Table(title="Token usage by call", show_header=True, header_style="bold cyan")
+    table.add_column("Round", style="dim", justify="right")
+    table.add_column("Speaker", style="bold")
+    table.add_column("Prompt", justify="right")
+    table.add_column("Completion", justify="right")
+    table.add_column("Subtotal", justify="right")
+    for r in rows:
+        table.add_row(
+            str(r["round"]),
+            r["speaker"],
+            str(r["prompt"]),
+            str(r["completion"]),
+            str(r["subtotal"]),
+        )
+    console.print(table)
+    console.print()
+
+
+def _print_session_token_footer(result: BattleResult) -> None:
+    """Print aggregate token counts for the whole run."""
+    console.print(
+        "[dim]Session total (all LLM calls) — prompt: "
+        f"{result.token_prompt}, completion: {result.token_completion}, "
+        f"total: {result.token_total}[/]"
+    )
     console.print()
 
 
@@ -124,6 +155,11 @@ def parse_args(config: Dict[str, Any]) -> argparse.Namespace:
         type=str,
         default=models.get("judge", "llama3.2:latest"),
         help="Ollama model for the judge (default from config).",
+    )
+    parser.add_argument(
+        "--token-table",
+        action="store_true",
+        help="After the debate, print a Rich table of per-call token usage.",
     )
     return parser.parse_args()
 
@@ -165,6 +201,10 @@ def main() -> None:
 
     arena = Arena(machiavelli=machiavelli, socrates=socrates, judge=judge, llm_options=llm_options)
 
+    n_rounds = int(args.rounds)
+    speech_idx = 0
+    token_rows: list[Dict[str, Any]] = []
+
     console.print()
     console.print(
         Panel(
@@ -177,9 +217,25 @@ def main() -> None:
     console.print()
 
     def on_speech(entry: SpeechTurn) -> None:
-        _print_speech(entry)
+        nonlocal speech_idx
+        speech_idx += 1
+        round_num = (speech_idx - 1) // 2 + 1
+        if (speech_idx - 1) % 2 == 0:
+            console.rule(f"[bold cyan]Round {round_num} / {n_rounds}[/]", align="center")
+        _print_speech(entry, round_num=round_num, total_rounds=n_rounds)
+        if args.token_table:
+            token_rows.append(
+                {
+                    "round": round_num,
+                    "speaker": entry.name,
+                    "prompt": entry.prompt_tokens,
+                    "completion": entry.completion_tokens,
+                    "subtotal": entry.prompt_tokens + entry.completion_tokens,
+                }
+            )
 
     def on_verdict(text: str, p: int, c: int) -> None:
+        console.rule("[bold yellow]Judge[/]", align="center")
         console.print(
             Panel(
                 Text(text, style="bold"),
@@ -188,13 +244,23 @@ def main() -> None:
                 width=PANEL_WIDTH,
             )
         )
-        console.print(f"[dim]Tokens: prompt: {p}, completion: {c}, total: {p + c}[/]")
+        console.print(f"[dim]Judge call only — prompt: {p}, completion: {c}, subtotal: {p + c}[/]")
         console.print()
+        if args.token_table:
+            token_rows.append(
+                {
+                    "round": "—",
+                    "speaker": "Judge",
+                    "prompt": p,
+                    "completion": c,
+                    "subtotal": p + c,
+                }
+            )
 
     try:
         result: BattleResult = arena.run_battle(
             args.topic,
-            rounds=int(args.rounds),
+            rounds=n_rounds,
             on_speech=on_speech,
             on_verdict=on_verdict,
         )
@@ -203,6 +269,10 @@ def main() -> None:
         sys.exit(130)
     except Exception as e:  # pragma: no cover - defensive
         _error_exit(f"Unexpected error while running debate: {e}")
+
+    if args.token_table and token_rows:
+        _print_token_usage_table(token_rows)
+    _print_session_token_footer(result)
 
     debates_dir = settings.get("debates_dir", "debates")
     try:
