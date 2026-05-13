@@ -54,21 +54,21 @@ def ensure_models(model_m: str, model_s: str, model_judge: str) -> bool:
         return False
 
 
-def render_speech(entry: SpeechTurn) -> None:
+def render_speech(entry: SpeechTurn, *, round_num: int, total_rounds: int) -> None:
     """Render one speech block in Streamlit."""
     name = entry.name
     icon = entry.icon
     think = (entry.think or "").strip()
     speech = entry.speech
     st.markdown(f"### {icon} {name.upper()}")
+    st.caption(f"Round **{round_num}** of **{total_rounds}**")
     if think:
         with st.expander("🔍 Thoughts", expanded=False):
             st.caption(think)
     st.markdown(speech)
     p = entry.prompt_tokens
     c = entry.completion_tokens
-    if p is not None and c is not None:
-        st.caption(f"Tokens: prompt {p}, completion {c}, total {p + c}")
+    st.caption(f"This reply — prompt **{p}**, completion **{c}**, subtotal **{p + c}**")
     st.divider()
 
 
@@ -130,19 +130,52 @@ def main():
 
     arena = Arena(machiavelli=machiavelli, socrates=socrates, judge=judge, llm_options=llm_options)
 
-    def on_speech(entry: SpeechTurn) -> None:
-        render_speech(entry)
+    n_rounds = int(rounds)
+    total_llm_steps = n_rounds * 2 + 1
+    speech_idx = 0
 
-    def on_verdict(text: str, p: int, c: int) -> None:
-        st.markdown("### ⚖️ VERDICT")
-        st.markdown(f"**{text}**")
-        st.caption(f"Tokens: prompt {p}, completion {c}, total {p + c}")
+    prog = st.progress(0, text="Preparing debate…")
+    with st.status("Debate in progress…", expanded=True) as run_status:
+        def on_speech(entry: SpeechTurn) -> None:
+            nonlocal speech_idx
+            speech_idx += 1
+            round_num = (speech_idx - 1) // 2 + 1
+            run_status.update(
+                label=f"Round {round_num}/{n_rounds} — {entry.name} replied",
+                state="running",
+            )
+            prog.progress(
+                min(speech_idx / total_llm_steps, 1.0),
+                text=f"Round {round_num}/{n_rounds} · {entry.name}",
+            )
+            render_speech(entry, round_num=round_num, total_rounds=n_rounds)
 
-    result: BattleResult = arena.run_battle(
-        topic.strip(),
-        rounds=int(rounds),
-        on_speech=on_speech,
-        on_verdict=on_verdict,
+        def on_verdict(text: str, p: int, c: int) -> None:
+            nonlocal speech_idx
+            speech_idx += 1
+            prog.progress(1.0, text="Judge verdict")
+            run_status.update(label="Judge finished", state="running")
+            st.markdown("### ⚖️ VERDICT")
+            st.markdown(f"**{text}**")
+            st.caption(
+                f"Judge call only — prompt **{p}**, completion **{c}**, subtotal **{p + c}** "
+                "(not the full session total)"
+            )
+
+        result: BattleResult = arena.run_battle(
+            topic.strip(),
+            rounds=n_rounds,
+            on_speech=on_speech,
+            on_verdict=on_verdict,
+        )
+
+        run_status.update(label="Debate finished", state="complete")
+
+    st.subheader("Session token usage")
+    st.caption(
+        f"Sum of every LLM call in this run (all rounds + judge): "
+        f"prompt **{result.token_prompt}**, completion **{result.token_completion}**, "
+        f"total **{result.token_total}**"
     )
 
     if result.interrupted:
