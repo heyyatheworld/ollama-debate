@@ -1,0 +1,8 @@
+# Streamlit theme for Ollama Debate (loaded when running `streamlit run app.py` from repo root).
+[theme]
+base = "light"
+primaryColor = "#166a73"
+backgroundColor = "#faf9f6"
+secondaryBackgroundColor = "#f0ebe3"
+textColor = "#1c1917"
+font = "sans serif"
