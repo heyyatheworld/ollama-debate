@@ -59,7 +59,7 @@ def build_markdown(
     model_m: str,
     model_s: str,
     model_judge: str,
-    transcript_entries: List[Dict[str, Any]],
+    transcript_entries: List[SpeechTurn],
     verdict: str,
     token_stats: Optional[Dict[str, int]] = None,
 ) -> str:
@@ -77,10 +77,10 @@ def build_markdown(
         "",
     ]
     for entry in transcript_entries:
-        name = entry["name"]
-        icon = entry["icon"]
-        think = (entry.get("think") or "").strip()
-        speech = entry["speech"]
+        name = entry.name
+        icon = entry.icon
+        think = (entry.think or "").strip()
+        speech = entry.speech
         if think:
             lines.append("<details><summary>Thoughts</summary>")
             lines.append("")
@@ -113,7 +113,7 @@ def save_debate_to_md(
     model_m: str,
     model_s: str,
     model_judge: str,
-    transcript_entries: List[Dict[str, Any]],
+    transcript_entries: List[SpeechTurn],
     verdict: str,
     token_stats: Optional[Dict[str, int]] = None,
     debates_dir: str = "debates",
@@ -190,6 +190,18 @@ class Participant:
 
 
 @dataclass
+class SpeechTurn:
+    """One participant reply in the debate transcript (not the judge verdict)."""
+
+    name: str
+    icon: str
+    think: str
+    speech: str
+    prompt_tokens: int
+    completion_tokens: int
+
+
+@dataclass
 class BattleResult:
     """Structured result of a single debate."""
 
@@ -197,7 +209,7 @@ class BattleResult:
     machiavelli_model: str
     socrates_model: str
     judge_model: str
-    transcript_entries: List[Dict[str, Any]]
+    transcript_entries: List[SpeechTurn]
     verdict: str
     token_prompt: int
     token_completion: int
@@ -233,13 +245,13 @@ class Arena:
         """Run the full debate loop and return a BattleResult.
 
         If on_speech is provided, it is called after each participant reply with
-        the transcript entry dict. If on_verdict is provided, it is called once
+        a SpeechTurn. If on_verdict is provided, it is called once
         with (verdict_text, prompt_tokens, completion_tokens) for the judge.
         """
         history_m: List[Dict[str, str]] = []
         history_s: List[Dict[str, str]] = []
         transcript_plain: List[str] = []
-        transcript_entries: List[Dict[str, Any]] = []
+        transcript_entries: List[SpeechTurn] = []
         total_prompt = 0
         total_completion = 0
 
@@ -260,14 +272,14 @@ class Arena:
                 think_m, speech_m = extract_think(res_m["message"]["content"])
                 history_m.append({"role": "assistant", "content": speech_m})
                 transcript_plain.append(f"{self.machiavelli.name}: {speech_m}")
-                entry_m = {
-                    "name": self.machiavelli.name,
-                    "icon": self.machiavelli.icon,
-                    "think": think_m,
-                    "speech": speech_m,
-                    "prompt_tokens": prompt_m,
-                    "completion_tokens": completion_m,
-                }
+                entry_m = SpeechTurn(
+                    name=self.machiavelli.name,
+                    icon=self.machiavelli.icon,
+                    think=think_m,
+                    speech=speech_m,
+                    prompt_tokens=prompt_m,
+                    completion_tokens=completion_m,
+                )
                 transcript_entries.append(entry_m)
                 if on_speech is not None:
                     on_speech(entry_m)
@@ -285,14 +297,14 @@ class Arena:
                 think_s, speech_s = extract_think(res_s["message"]["content"])
                 history_s.append({"role": "assistant", "content": speech_s})
                 transcript_plain.append(f"{self.socrates.name}: {speech_s}")
-                entry_s = {
-                    "name": self.socrates.name,
-                    "icon": self.socrates.icon,
-                    "think": think_s,
-                    "speech": speech_s,
-                    "prompt_tokens": prompt_s,
-                    "completion_tokens": completion_s,
-                }
+                entry_s = SpeechTurn(
+                    name=self.socrates.name,
+                    icon=self.socrates.icon,
+                    think=think_s,
+                    speech=speech_s,
+                    prompt_tokens=prompt_s,
+                    completion_tokens=completion_s,
+                )
                 transcript_entries.append(entry_s)
                 if on_speech is not None:
                     on_speech(entry_s)

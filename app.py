@@ -7,6 +7,7 @@ from arena import (
     Arena,
     BattleResult,
     Participant,
+    SpeechTurn,
     check_ollama_running,
     ensure_models_available,
     load_config,
@@ -52,19 +53,19 @@ def ensure_models(model_m: str, model_s: str, model_judge: str) -> bool:
         return False
 
 
-def render_speech(entry: dict) -> None:
+def render_speech(entry: SpeechTurn) -> None:
     """Render one speech block in Streamlit."""
-    name = entry["name"]
-    icon = entry["icon"]
-    think = (entry.get("think") or "").strip()
-    speech = entry["speech"]
+    name = entry.name
+    icon = entry.icon
+    think = (entry.think or "").strip()
+    speech = entry.speech
     st.markdown(f"### {icon} {name.upper()}")
     if think:
         with st.expander("🔍 Thoughts", expanded=False):
             st.caption(think)
     st.markdown(speech)
-    p = entry.get("prompt_tokens")
-    c = entry.get("completion_tokens")
+    p = entry.prompt_tokens
+    c = entry.completion_tokens
     if p is not None and c is not None:
         st.caption(f"Tokens: prompt {p}, completion {c}, total {p + c}")
     st.divider()
@@ -153,9 +154,8 @@ def main():
     )
 
     arena = Arena(machiavelli=machiavelli, socrates=socrates, judge=judge, llm_options=llm_options)
-    collected_result: dict = {}
 
-    def on_speech(entry: dict) -> None:
+    def on_speech(entry: SpeechTurn) -> None:
         render_speech(entry)
 
     def on_verdict(text: str, p: int, c: int) -> None:

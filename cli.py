@@ -15,6 +15,7 @@ from arena import (
     Arena,
     BattleResult,
     Participant,
+    SpeechTurn,
     check_ollama_running,
     ensure_models_available,
     load_config,
@@ -56,12 +57,12 @@ def _print_settings_table(args: argparse.Namespace) -> None:
     console.print()
 
 
-def _print_speech(entry: Dict[str, Any]) -> None:
+def _print_speech(entry: SpeechTurn) -> None:
     """Print one participant's speech in a Rich panel."""
-    name = entry["name"]
-    icon = entry["icon"]
-    think = (entry.get("think") or "").strip()
-    speech = entry["speech"]
+    name = entry.name
+    icon = entry.icon
+    think = (entry.think or "").strip()
+    speech = entry.speech
     border_style = "magenta" if name == "Machiavelli" else "cyan"
 
     body = Text()
@@ -79,8 +80,8 @@ def _print_speech(entry: Dict[str, Any]) -> None:
             width=PANEL_WIDTH,
         )
     )
-    p = entry.get("prompt_tokens")
-    c = entry.get("completion_tokens")
+    p = entry.prompt_tokens
+    c = entry.completion_tokens
     if p is not None and c is not None:
         console.print(f"[dim]Tokens: prompt: {p}, completion: {c}, total: {p + c}[/]")
     console.print()
@@ -200,7 +201,7 @@ def main() -> None:
     )
     console.print()
 
-    def on_speech(entry: Dict[str, Any]) -> None:
+    def on_speech(entry: SpeechTurn) -> None:
         _print_speech(entry)
 
     def on_verdict(text: str, p: int, c: int) -> None:
