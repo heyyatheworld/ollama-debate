@@ -1,10 +1,14 @@
 """Core business logic for the Ollama Debate project.
 
-This module contains:
-- Config and environment helpers (config.yaml, Ollama availability, models).
-- Pure debate logic in the Arena class (no CLI or web UI code).
-- Helpers to build participants and LLM options from config (shared by CLI and UI).
-- Utilities for saving debate transcripts to Markdown.
+This module is the single source of debate semantics and file export:
+
+- **Config** — `load_config`, `check_ollama_running`, `ensure_models_available`.
+- **Setup from YAML** — `build_participants`, `llm_options_from_config` (shared by CLI and Streamlit).
+- **Domain types** — `Participant`, `SpeechTurn` (one debater reply), `BattleResult` (transcript + verdict + token sums).
+- **Orchestration** — `Arena.run_battle`: for each round, Machiavelli then Socrates via `ollama.chat`; then the Judge on the full plain transcript. Optional `on_speech` / `on_verdict` hooks allow UIs to stream output without importing Ollama in the front ends.
+- **Artifacts** — `build_markdown`, `save_debate_to_md` (filename `YYYY-MM-DD_slug.md` under a configurable directory).
+
+CLI and web UI only construct `Arena`, wire callbacks, and call save/download helpers; they do not duplicate the turn loop.
 """
 
 from __future__ import annotations
@@ -277,7 +281,17 @@ class BattleResult:
 
 
 class Arena:
-    """Coordinates a debate between two participants and a judge."""
+    """Run a fixed-format debate: Machiavelli and Socrates alternate; then the Judge.
+
+    Each debater maintains its own `ollama.chat` message history (system + thread).
+    The Judge receives a single user message: the joined plain transcript (no
+    structured JSON). Token counts from every `ollama.chat` response are summed
+    into `BattleResult.token_prompt` and `token_completion`.
+
+    Front ends should use `build_participants` and `llm_options_from_config`
+    with a loaded config dict, then pass the resulting `Participant` instances
+    and options into this class.
+    """
 
     def __init__(
         self,
@@ -298,11 +312,29 @@ class Arena:
         on_speech: Optional[Any] = None,
         on_verdict: Optional[Any] = None,
     ) -> BattleResult:
-        """Run the full debate loop and return a BattleResult.
+        """Run `rounds` exchanges (each exchange: Machiavelli, then Socrates), then the Judge.
 
-        If on_speech is provided, it is called after each participant reply with
-        a SpeechTurn. If on_verdict is provided, it is called once
-        with (verdict_text, prompt_tokens, completion_tokens) for the judge.
+        The first user message to Machiavelli asks him to open the debate on `topic`.
+        Each following round uses Socrates’s last speech as the next prompt for Machiavelli.
+
+        **Callbacks**
+
+        - ``on_speech(entry: SpeechTurn)`` — invoked after each debater completion with
+          name, icon, optional extracted ``think`` snippet, visible ``speech``, and
+          token counts for that call only.
+        - ``on_verdict(text, prompt_tokens, completion_tokens)`` — invoked once after
+          the judge model returns; these token counts are for the judge call only,
+          while the returned ``BattleResult`` includes session-wide totals.
+
+        **Interruption**
+
+        On ``KeyboardInterrupt``, returns a ``BattleResult`` with ``interrupted=True``,
+        a placeholder verdict string, and whatever transcript was built so far (no
+        ``on_verdict`` call in that path).
+
+        Returns:
+            ``BattleResult`` with models used, ``transcript_entries`` (debater turns only),
+            ``verdict`` text, aggregated token fields, and ``interrupted`` flag.
         """
         history_m: List[Dict[str, str]] = []
         history_s: List[Dict[str, str]] = []
