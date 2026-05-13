@@ -1,4 +1,5 @@
 """Streamlit web UI for Ollama Debate (web interface layer)."""
+from datetime import date
 from pathlib import Path
 
 import streamlit as st
@@ -6,6 +7,7 @@ import streamlit as st
 from arena import (
     Arena,
     BattleResult,
+    build_markdown,
     build_participants,
     check_ollama_running,
     ensure_models_available,
@@ -13,6 +15,7 @@ from arena import (
     load_config,
     save_debate_to_md,
     SpeechTurn,
+    topic_to_slug,
 )
 
 
@@ -182,24 +185,52 @@ def main():
         st.warning("Debate interrupted by user. Partial transcript above.")
 
     debates_dir = settings_cfg.get("debates_dir", DEBATES_DIR)
+    token_stats = {
+        "prompt": result.token_prompt,
+        "completion": result.token_completion,
+        "total": result.token_total,
+    }
+    md_content = build_markdown(
+        topic=result.topic,
+        model_m=result.machiavelli_model,
+        model_s=result.socrates_model,
+        model_judge=result.judge_model,
+        transcript_entries=result.transcript_entries,
+        verdict=result.verdict,
+        token_stats=token_stats,
+    )
+
+    filepath_str: str | None = None
     try:
-        filepath = save_debate_to_md(
+        filepath_str = save_debate_to_md(
             topic=result.topic,
             model_m=result.machiavelli_model,
             model_s=result.socrates_model,
             model_judge=result.judge_model,
             transcript_entries=result.transcript_entries,
             verdict=result.verdict,
-            token_stats={
-                "prompt": result.token_prompt,
-                "completion": result.token_completion,
-                "total": result.token_total,
-            },
+            token_stats=token_stats,
             debates_dir=debates_dir,
         )
-        st.success(f"Debate saved to **{filepath}**")
+        st.success(f"Debate saved to **{filepath_str}**")
     except OSError as e:
         st.error(f"Could not save file: {e}")
+
+    download_name = (
+        Path(filepath_str).name
+        if filepath_str
+        else f"{date.today().isoformat()}_{topic_to_slug(result.topic)}.md"
+    )
+    st.download_button(
+        "Download transcript (.md)",
+        data=md_content.encode("utf-8"),
+        file_name=download_name,
+        mime="text/markdown",
+        type="primary",
+        use_container_width=True,
+    )
+    with st.expander("Markdown preview", expanded=False):
+        st.code(md_content, language="markdown")
 
 
 if __name__ == "__main__":
