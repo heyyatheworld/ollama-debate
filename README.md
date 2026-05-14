@@ -13,6 +13,8 @@ A small Python project: a **CLI** ([Rich](https://rich.readthedocs.io/)) and a *
 | **`cli.py`** | Command-line entrypoint and Rich output. |
 | **`app.py`** | Streamlit UI. |
 | **`config.yaml`** | Default models, system prompts, `settings` (rounds, `debates_dir`, generation options). |
+| **`pyproject.toml`** | Package metadata, dependencies (mirror `requirements.txt`), console script **`ollama-debate`**. |
+| **`LICENSE`** | MIT. |
 | **`.streamlit/config.toml`** | Streamlit theme (colors, font); loaded when you run `streamlit run` from this repo root. |
 | **`tests/`** | Pytest tests (mocked; no live Ollama required). |
 | **`debates/`** | Created when a run saves a transcript (Markdown). |
@@ -21,7 +23,7 @@ A small Python project: a **CLI** ([Rich](https://rich.readthedocs.io/)) and a *
 
 - [Ollama](https://ollama.com/) installed and running locally  
 - **Python 3.9+** (commonly run on 3.11–3.13)  
-- Dependencies from **`requirements.txt`**: **ollama**, **rich**, **PyYAML**, **pytest**, **streamlit** ≥ 1.33 (UI uses `st.status`, optional streaming, etc.)
+- Dependencies: **`requirements.txt`** (flat install) or **`pyproject.toml`** (editable install / packaging). Same packages: **ollama**, **rich**, **PyYAML**, **pytest**, **streamlit** ≥ 1.33.
 
 ## Setup
 
@@ -30,6 +32,8 @@ From the repository root:
 ```bash
 cd /path/to/ollama-debate
 python3 -m pip install -r requirements.txt
+# optional: editable install + CLI command on PATH (same deps)
+python3 -m pip install -e .
 ```
 
 Optional virtual environment:
@@ -54,10 +58,12 @@ If you change model names in `config.yaml`, pull those tags instead.
 
 | Action | Command |
 |--------|---------|
-| Install dependencies | `python3 -m pip install -r requirements.txt` |
+| Install dependencies (requirements file) | `python3 -m pip install -r requirements.txt` |
+| Install **editable** (registers `ollama-debate` CLI) | `python3 -m pip install -e .` |
 | Run **CLI** (defaults from `config.yaml`) | `python3 cli.py` |
+| Run CLI via **installed script** | `ollama-debate` |
 | Run CLI with **venv** interpreter | `.venv/bin/python cli.py` |
-| CLI **help** (all flags) | `python3 cli.py --help` |
+| CLI **help** (all flags) | `python3 cli.py --help` or `ollama-debate --help` |
 | CLI with **topic / rounds / models** | `python3 cli.py --topic "Your topic" --rounds 3 --model_m MODEL --model_s MODEL --judge MODEL` |
 | CLI with **per-call token table** after the run | `python3 cli.py --token-table` |
 | Run **Streamlit** (run from repo root so theme loads) | `streamlit run app.py` |
@@ -156,3 +162,9 @@ flowchart TD
 4. **Output** — **CLI:** Rich panels, round rules, per-reply and judge token lines, optional **`--token-table`**, session total line, Markdown log. **Streamlit:** theme + layout CSS, session overview card, bordered speech/verdict blocks, progress + status, optional streaming, metrics, save + download + preview. Logs go under **`debates/`** (or `settings.debates_dir` in `config.yaml`).
 
 5. **Performance** — Tune `num_ctx`, `num_predict`, and `temperature` in `config.yaml` for your hardware.
+
+## Release status (v1.0.0)
+
+- **CLI** and **Streamlit** entrypoints documented above; tests pass with `python3 -m pytest tests/`.
+- **License:** MIT (`LICENSE`). **Packaging:** `pyproject.toml` + optional `pip install -e .` and the **`ollama-debate`** command (same as `python cli.py`).
+- **Artifacts:** Markdown debates saved under `debates/` (gitignored by default so local runs are not committed).
